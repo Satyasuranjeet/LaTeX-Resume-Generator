@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 import crypto from "crypto";
@@ -75,19 +74,22 @@ function buildCompactResumeContext(resumeData: any) {
   };
 }
 
-async function startServer() {
-  const app = express();
-  app.use(express.json({ limit: "15mb" }));
+const app = express();
+app.use(express.json({ limit: "15mb" }));
 
-  // Establish standard database connection safely without crashing development server
+// Ensure MongoDB connection on every request to support serverless cold starts.
+// connectDB() is a no-op when a connection is already cached (see isConnected flag).
+app.use(async (_req: express.Request, _res: express.Response, next: express.NextFunction) => {
   try {
     await connectDB();
   } catch (err) {
-    console.error("Critical warning: Initial MongoDB Atlas connection failed. Server will continue launching.", err);
+    console.error("Critical warning: MongoDB Atlas connection failed. Database-dependent endpoints will not work until connection is restored.", err);
   }
+  next();
+});
 
-  // Dynamic redirect URI helper for Google OAuth 2.0
-  const getRedirectUri = (req: express.Request) => {
+// Dynamic redirect URI helper for Google OAuth 2.0
+const getRedirectUri = (req: express.Request) => {
     const host = req.headers.host || "localhost:3000";
     const isLocal = host.includes("localhost") || host.includes("127.0.0.1");
     const protocol = !isLocal && (req.secure || req.headers["x-forwarded-proto"] === "https") ? "https" : "http";
@@ -506,24 +508,30 @@ ${careerVaultText}
     res.json({ status: "healthy" });
   });
 
-  // Vite Integration
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
+// Export for Vercel serverless — Vercel routes /api/* to this handler and serves the
+// frontend static files from dist/ via its CDN. No HTTP listener or Vite server needed.
+export default app;
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server launched and listening coordinates: http://localhost:${PORT}`);
-  });
+// For non-Vercel environments, add frontend serving and start the HTTP server.
+if (!process.env.VERCEL) {
+  (async () => {
+    if (process.env.NODE_ENV !== "production") {
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), "dist");
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    }
+
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`Server launched and listening coordinates: http://localhost:${PORT}`);
+    });
+  })();
 }
-
-startServer();
