@@ -39,6 +39,11 @@ import LandingPage from "./components/LandingPage";
 
 import { useUser, useAuth } from "@clerk/clerk-react";
 
+// Base URL for the FastAPI backend. Set VITE_API_URL in .env to point at a
+// separately hosted backend (e.g. https://api.yoursite.com). Leave empty to
+// call relative paths on the same host.
+const API_BASE = ((import.meta as any).env.VITE_API_URL as string || "").replace(/\/$/, "");
+
 export default function App() {
   // State for resume data and settings
   const [resumeData, setResumeData] = useState<ResumeData>(initialResumeData);
@@ -69,7 +74,7 @@ export default function App() {
             const picture = clerkUser.imageUrl || "";
             const action = localStorage.getItem("clerk_auth_action") || "login";
 
-            const res = await fetch("/api/auth/verify-clerk", {
+            const res = await fetch(`${API_BASE}/api/auth/verify-clerk`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -144,7 +149,7 @@ export default function App() {
     const fetchCloudData = async () => {
       try {
         setCloudSaveStatus("saving");
-        const res = await fetch("/api/resume", {
+        const res = await fetch(`${API_BASE}/api/resume`, {
           headers: getAuthHeaders()
         });
         if (res.ok) {
@@ -187,7 +192,7 @@ export default function App() {
     if (!token) return;
     setCloudSaveStatus("saving");
     try {
-      const res = await fetch("/api/resume", {
+      const res = await fetch(`${API_BASE}/api/resume`, {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify({ resumeData, settings })
@@ -366,7 +371,7 @@ export default function App() {
     setEvaluationResult(null);
 
     try {
-      const response = await fetch("/api/score", {
+      const response = await fetch(`${API_BASE}/api/score`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ resumeData, jd })
