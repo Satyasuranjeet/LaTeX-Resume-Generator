@@ -77,12 +77,13 @@ function buildCompactResumeContext(resumeData: any) {
 const app = express();
 app.use(express.json({ limit: "15mb" }));
 
-// Ensure MongoDB connection on every request to support serverless cold starts
+// Ensure MongoDB connection on every request to support serverless cold starts.
+// connectDB() is a no-op when a connection is already cached (see isConnected flag).
 app.use(async (_req: express.Request, _res: express.Response, next: express.NextFunction) => {
   try {
     await connectDB();
   } catch (err) {
-    console.error("Critical warning: MongoDB Atlas connection failed. Server will continue.", err);
+    console.error("Critical warning: MongoDB Atlas connection failed. Database-dependent endpoints will not work until connection is restored.", err);
   }
   next();
 });
