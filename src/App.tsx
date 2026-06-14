@@ -43,6 +43,26 @@ const API_BASE = (
   ""
 ).replace(/\/$/, "");
 
+const readResponseBody = async (response: Response) => {
+  const text = await response.text();
+  if (!text.trim()) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+};
+
+const getResponseError = (body: unknown, fallback: string) => {
+  if (!body) return fallback;
+  if (typeof body === "string") return body;
+  if (typeof body === "object") {
+    const data = body as Record<string, unknown>;
+    return String(data.error || data.detail || data.message || fallback);
+  }
+  return fallback;
+};
+
 export default function App() {
   // State for resume data and settings
   const [resumeData, setResumeData] = useState<ResumeData>(initialResumeData);
@@ -185,15 +205,26 @@ export default function App() {
     setEvaluationResult(null);
 
     try {
-      const response = await fetch(`${API_BASE}/api/score`, {
+      const requestInit = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ resumeData, jd })
-      });
+      };
+      let response = await fetch(`${API_BASE}/api/score`, requestInit);
+      let data = await readResponseBody(response);
 
-      const data = await response.json();
+      if ((response.status === 404 || response.status === 405) && API_BASE) {
+        response = await fetch(`${API_BASE}/score`, requestInit);
+        data = await readResponseBody(response);
+      }
+
       if (!response.ok) {
-        throw new Error(data.error || "Failed to analyze resume.");
+        throw new Error(
+          getResponseError(
+            data,
+            `Scoring service returned HTTP ${response.status}. Check that the backend accepts POST requests at /api/score.`
+          )
+        );
       }
 
       setEvaluationResult(data);

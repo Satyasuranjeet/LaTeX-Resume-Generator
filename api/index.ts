@@ -63,7 +63,7 @@ function buildCompactResumeContext(resumeData: any) {
 const app = express();
 app.use(express.json({ limit: "15mb" }));
 
-app.post("/api/score", async (req, res) => {
+const scoreHandler = async (req: express.Request, res: express.Response) => {
   try {
     const { resumeData, jd } = req.body;
     if (!jd?.trim()) return res.status(400).json({ error: "Job Description is required." });
@@ -165,7 +165,9 @@ ${careerVaultText}
     console.error("Gemini Scoring Error:", err);
     res.status(500).json({ error: err.message || "An unexpected error occurred during resume evaluation." });
   }
-});
+};
+
+app.post(["/api/score", "/score"], scoreHandler);
 
 app.get("/api/health", (_req, res) => res.json({ status: "healthy" }));
 
