@@ -14,6 +14,8 @@ from typing import Optional
 
 import httpx
 import google.generativeai as genai
+import jwt
+from jwt import PyJWKClient
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -25,6 +27,9 @@ from database import connect_db, users_col
 load_dotenv()
 
 GEMINI_TIMEOUT_SECS = 60
+CLERK_AUDIENCE = os.getenv("CLERK_JWT_AUDIENCE") or None
+CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL") or None
+CLERK_ISSUER = os.getenv("CLERK_JWT_ISSUER") or None
 
 # ── App ────────────────────────────────────────────────────────────────────────
 
@@ -48,7 +53,7 @@ async def startup_event() -> None:
 # ── Pydantic request models ────────────────────────────────────────────────────
 
 class VerifyClerkRequest(BaseModel):
-    clerkId: str
+    clerkId: str = ""
     email: str = ""
     name: str = ""
     picture: str = ""
@@ -148,6 +153,66 @@ def _get_redirect_uri(request: Request) -> str:
     return f"{protocol}://{host}/api/auth/google/callback"
 
 
+def _verify_clerk_token(token: str) -> dict:
+    try:
+        unverified = jwt.decode(token, options={"verify_signature": False})
+        issuer = CLERK_ISSUER or unverified.get("iss")
+        if not issuer:
+            raise HTTPException(status_code=401, detail="Clerk token issuer is missing.")
+
+        jwks_url = CLERK_JWKS_URL or f"{issuer.rstrip('/')}/.well-known/jwks.json"
+        signing_key = PyJWKClient(jwks_url).get_signing_key_from_jwt(token).key
+        options = {"verify_aud": bool(CLERK_AUDIENCE)}
+        return jwt.decode(
+            token,
+            signing_key,
+            algorithms=["RS256"],
+            audience=CLERK_AUDIENCE,
+            issuer=issuer,
+            options=options,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=f"Invalid Clerk session token: {exc}")
+
+
+async def _find_or_create_clerk_user(
+    clerk_id: str,
+    email: str = "",
+    name: str = "",
+    picture: str = "",
+):
+    users = users_col()
+    clean_email = email.strip().lower()
+
+    user = await users.find_one({"clerkId": clerk_id})
+    if not user and clean_email:
+        user = await users.find_one({"email": clean_email})
+        if user:
+            update: dict = {"clerkId": clerk_id}
+            if name and not user.get("name"):
+                update["name"] = name
+            if picture and not user.get("picture"):
+                update["picture"] = picture
+            await users.update_one({"_id": user["_id"]}, {"$set": update})
+            user = await users.find_one({"_id": user["_id"]})
+
+    if not user and clean_email:
+        doc = {
+            "clerkId": clerk_id,
+            "email": clean_email,
+            "name": name or clean_email.split("@")[0],
+            "picture": picture or f"https://api.dicebear.com/7.x/identicon/svg?seed={clean_email}",
+            "resumeData": None,
+            "settings": None,
+        }
+        result = await users.insert_one(doc)
+        user = await users.find_one({"_id": result.inserted_id})
+
+    return user
+
+
 async def get_current_user(
     authorization: Optional[str] = Header(None),
     x_clerk_email: Optional[str] = Header(None),
@@ -157,38 +222,21 @@ async def get_current_user(
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized session credentials.")
 
-    token = authorization.split(" ", 1)[1]
+    token = authorization.split(" ", 1)[1].strip()
     users = users_col()
     user = None
 
-    if token.startswith("user_") or x_clerk_email:
-        email = (x_clerk_email or "").lower()
+    if token.startswith("session-"):
+        user = await users.find_one({"sessionToken": token})
+    else:
+        claims = _verify_clerk_token(token)
+        clerk_id = claims.get("sub")
+        if not clerk_id:
+            raise HTTPException(status_code=401, detail="Clerk token subject is missing.")
+        email = (x_clerk_email or claims.get("email") or "").lower()
         name = x_clerk_name or ""
         picture = x_clerk_picture or ""
-
-        user = await users.find_one({"clerkId": token})
-        if not user and email:
-            user = await users.find_one({"email": email})
-            if user:
-                update: dict = {"clerkId": token}
-                if name and not user.get("name"):
-                    update["name"] = name
-                if picture and not user.get("picture"):
-                    update["picture"] = picture
-                await users.update_one({"_id": user["_id"]}, {"$set": update})
-                user = await users.find_one({"_id": user["_id"]})
-
-        if not user and email:
-            doc = {
-                "clerkId": token,
-                "email": email,
-                "name": name or email.split("@")[0],
-                "picture": picture or f"https://api.dicebear.com/7.x/identicon/svg?seed={email}",
-                "resumeData": None,
-                "settings": None,
-            }
-            result = await users.insert_one(doc)
-            user = await users.find_one({"_id": result.inserted_id})
+        user = await _find_or_create_clerk_user(clerk_id, email, name, picture)
 
     if not user:
         raise HTTPException(status_code=401, detail="Expired or invalid session token.")
@@ -308,23 +356,31 @@ async def google_auth_callback(request: Request, code: Optional[str] = None):
 # ── Endpoint 3 — Verify Clerk user ────────────────────────────────────────────
 
 @app.post("/api/auth/verify-clerk")
-async def verify_clerk(body: VerifyClerkRequest):
-    if not body.clerkId:
-        raise HTTPException(status_code=400, detail="Missing Clerk User Identifier.")
+async def verify_clerk(body: VerifyClerkRequest, authorization: Optional[str] = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Clerk session token.")
+
+    claims = _verify_clerk_token(authorization.split(" ", 1)[1].strip())
+    clerk_id = claims.get("sub")
+    if not clerk_id:
+        raise HTTPException(status_code=401, detail="Clerk token subject is missing.")
+
+    clean_email = body.email.strip().lower()
+    if not clean_email:
+        clean_email = (claims.get("email") or claims.get("primary_email_address") or "").strip().lower()
+    if not clean_email:
+        raise HTTPException(status_code=400, detail="Clerk profile email is missing.")
 
     users = users_col()
-    clean_email = body.email.strip().lower()
 
-    user = await users.find_one({"clerkId": body.clerkId})
+    user = await users.find_one({"clerkId": clerk_id})
     if not user and clean_email:
         user = await users.find_one({"email": clean_email})
 
-    if body.action == "login":
-        if not user:
-            raise HTTPException(status_code=400, detail="Account does not exist. Please register first.")
+    if user:
         update: dict = {}
         if not user.get("clerkId"):
-            update["clerkId"] = body.clerkId
+            update["clerkId"] = clerk_id
         if body.name and not user.get("name"):
             update["name"] = body.name
         if body.picture and not user.get("picture"):
@@ -332,12 +388,9 @@ async def verify_clerk(body: VerifyClerkRequest):
         if update:
             await users.update_one({"_id": user["_id"]}, {"$set": update})
             user = await users.find_one({"_id": user["_id"]})
-
-    elif body.action == "register":
-        if user:
-            raise HTTPException(status_code=400, detail="Account already exists. Please sign in instead.")
+    else:
         doc = {
-            "clerkId": body.clerkId,
+            "clerkId": clerk_id,
             "email": clean_email,
             "name": body.name.strip() if body.name else clean_email.split("@")[0],
             "picture": body.picture or f"https://api.dicebear.com/7.x/identicon/svg?seed={clean_email}",
@@ -347,7 +400,14 @@ async def verify_clerk(body: VerifyClerkRequest):
         result = await users.insert_one(doc)
         user = await users.find_one({"_id": result.inserted_id})
 
-    return {"success": True, "user": {"email": user["email"], "name": user.get("name"), "picture": user.get("picture")}}
+    return {
+        "success": True,
+        "user": {
+            "email": user["email"],
+            "name": user.get("name") or "",
+            "picture": user.get("picture") or "",
+        },
+    }
 
 
 # ── Endpoint 4 — GET resume ────────────────────────────────────────────────────

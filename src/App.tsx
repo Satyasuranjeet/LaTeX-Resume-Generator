@@ -42,7 +42,23 @@ import { useUser, useAuth } from "@clerk/clerk-react";
 // Base URL for the FastAPI backend. Set VITE_API_URL in .env to point at a
 // separately hosted backend (e.g. https://api.yoursite.com). Leave empty to
 // call relative paths on the same host.
-const API_BASE = ((import.meta as any).env.VITE_API_URL as string || "").replace(/\/$/, "");
+const API_BASE = (
+  ((import.meta as any).env.VITE_BACKEND_URL as string) ||
+  ((import.meta as any).env.VITE_API_URL as string) ||
+  ""
+).replace(/\/$/, "");
+
+const readApiJson = async (response: Response) => {
+  try {
+    return await response.json();
+  } catch {
+    return {};
+  }
+};
+
+const getApiError = (data: any, fallback: string) => {
+  return data?.error || data?.detail || data?.message || fallback;
+};
 
 export default function App() {
   // State for resume data and settings
@@ -51,7 +67,7 @@ export default function App() {
   
   // Clerk Hook Integrations
   const { isLoaded: isClerkLoaded, isSignedIn: isClerkSignedIn, user: clerkUser } = useUser();
-  const { signOut: clerkSignOut } = useAuth();
+  const { signOut: clerkSignOut, getToken: getClerkToken } = useAuth();
 
   // User Authentication and MongoDB states
   const [user, setUser] = useState<{ email: string; name: string; picture: string } | null>(null);
@@ -74,11 +90,18 @@ export default function App() {
             const picture = clerkUser.imageUrl || "";
             const action = localStorage.getItem("clerk_auth_action") || "login";
 
+            const sessionToken = await getClerkToken();
+            if (!sessionToken) {
+              throw new Error("Clerk session token is not available yet.");
+            }
+
             const res = await fetch(`${API_BASE}/api/auth/verify-clerk`, {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${sessionToken}`
+              },
               body: JSON.stringify({
-                clerkId: clerkUser.id,
                 email,
                 name,
                 picture,
@@ -86,14 +109,15 @@ export default function App() {
               })
             });
 
-            const data = await res.json();
+            const data = await readApiJson(res);
             if (res.ok) {
-              setUser({ email, name, picture });
-              setToken(clerkUser.id);
+              const verifiedUser = data.user || { email, name, picture };
+              setUser(verifiedUser);
+              setToken(sessionToken);
               setShowLanding(false);
               setClerkError("");
             } else {
-              setClerkError(data.error || "Verification failed.");
+              setClerkError(getApiError(data, "Verification failed."));
               setUser(null);
               setToken(null);
               setShowLanding(true);
@@ -124,15 +148,16 @@ export default function App() {
         setShowLanding(true);
       }
     }
-  }, [isClerkLoaded, isClerkSignedIn, clerkUser]);
+  }, [isClerkLoaded, isClerkSignedIn, clerkUser, getClerkToken]);
 
   // General auth headers provider that dynamically passes Clerk identifiers
-  const getAuthHeaders = () => {
+  const getAuthHeaders = async () => {
+    const sessionToken = isClerkSignedIn ? await getClerkToken() : token;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${token}`
+      "Authorization": `Bearer ${sessionToken || ""}`
     };
-    if (token && token.startsWith("user_") && user) {
+    if (user) {
       headers["x-clerk-email"] = user.email;
       headers["x-clerk-name"] = user.name;
       headers["x-clerk-picture"] = user.picture;
@@ -150,7 +175,7 @@ export default function App() {
       try {
         setCloudSaveStatus("saving");
         const res = await fetch(`${API_BASE}/api/resume`, {
-          headers: getAuthHeaders()
+          headers: await getAuthHeaders()
         });
         if (res.ok) {
           const data = await res.json();
@@ -194,7 +219,7 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/api/resume`, {
         method: "POST",
-        headers: getAuthHeaders(),
+        headers: await getAuthHeaders(),
         body: JSON.stringify({ resumeData, settings })
       });
       if (res.ok) {
