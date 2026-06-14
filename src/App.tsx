@@ -45,6 +45,7 @@ import { useUser, useAuth } from "@clerk/clerk-react";
 const API_BASE = (
   ((import.meta as any).env.VITE_BACKEND_URL as string) ||
   ((import.meta as any).env.VITE_API_URL as string) ||
+  ((import.meta as any).env.DEV ? "http://localhost:8000" : "") ||
   ""
 ).replace(/\/$/, "");
 
@@ -127,9 +128,11 @@ export default function App() {
                 console.error("Clerk pre-verification sign out error:", errSig);
               }
             }
-          } catch (err) {
+          } catch (err: any) {
             console.error("Clerk pre-verification check failed:", err);
-            setClerkError("Failed to check database credentials. Please try again.");
+            setClerkError(
+              `Could not reach the backend at ${API_BASE || "the current host"}. ${err?.message || "Please make sure the FastAPI server is running."}`
+            );
             setUser(null);
             setToken(null);
             setShowLanding(true);

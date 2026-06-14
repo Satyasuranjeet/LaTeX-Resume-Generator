@@ -174,7 +174,10 @@ def _verify_clerk_token(token: str) -> dict:
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=401, detail=f"Invalid Clerk session token: {exc}")
+        raise HTTPException(
+            status_code=401,
+            detail=f"Clerk session token could not be verified. Check that the token belongs to your Clerk instance and that the backend can reach Clerk JWKS. Details: {exc}",
+        )
 
 
 async def _find_or_create_clerk_user(
