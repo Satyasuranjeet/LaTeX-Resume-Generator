@@ -12,7 +12,6 @@
     "backend": "cd backend && uvicorn main:app --reload --port 8000"
   },
   "dependencies": {
-    "@clerk/clerk-react": "^5.61.8",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",

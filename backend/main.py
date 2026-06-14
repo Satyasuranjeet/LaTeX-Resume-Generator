@@ -1,41 +1,24 @@
-"""
-LaTeX Resume Generator — FastAPI Backend
-Ported from server.ts (Express/Node.js).
-
-Run locally:
-    uvicorn main:app --reload --port 8000
-"""
+"""FastAPI backend for the LaTeX resume generator."""
 
 import asyncio
 import json
 import os
-import secrets
-from typing import Optional
 
-import httpx
 import google.generativeai as genai
-import jwt
-from jwt import PyJWKClient
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-from database import connect_db, users_col
+from database import connect_db
 
 load_dotenv()
 
 GEMINI_TIMEOUT_SECS = 60
-CLERK_AUDIENCE = os.getenv("CLERK_JWT_AUDIENCE") or None
-CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL") or None
-CLERK_ISSUER = os.getenv("CLERK_JWT_ISSUER") or None
-
-# ── App ────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="LaTeX Resume Generator API", version="1.0.0")
 
-# CORS — allow any origin (credentials=False is required with allow_origins=["*"])
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -50,27 +33,10 @@ async def startup_event() -> None:
     await connect_db()
 
 
-# ── Pydantic request models ────────────────────────────────────────────────────
-
-class VerifyClerkRequest(BaseModel):
-    clerkId: str = ""
-    email: str = ""
-    name: str = ""
-    picture: str = ""
-    action: str = "login"
-
-
-class SaveResumeRequest(BaseModel):
-    resumeData: dict
-    settings: dict
-
-
 class ScoreRequest(BaseModel):
     resumeData: dict
     jd: str
 
-
-# ── Helpers — compact resume context ──────────────────────────────────────────
 
 def _trim(value, max_len: int) -> str:
     if not isinstance(value, str):
@@ -143,299 +109,6 @@ def build_compact_resume(resume: dict) -> dict:
     }
 
 
-# ── Auth helpers ───────────────────────────────────────────────────────────────
-
-def _get_redirect_uri(request: Request) -> str:
-    host = request.headers.get("host", "localhost:8000")
-    is_local = "localhost" in host or "127.0.0.1" in host
-    forwarded_proto = request.headers.get("x-forwarded-proto", "")
-    protocol = "https" if (not is_local and (request.url.scheme == "https" or forwarded_proto == "https")) else "http"
-    return f"{protocol}://{host}/api/auth/google/callback"
-
-
-def _verify_clerk_token(token: str) -> dict:
-    try:
-        unverified = jwt.decode(token, options={"verify_signature": False})
-        issuer = CLERK_ISSUER or unverified.get("iss")
-        if not issuer:
-            raise HTTPException(status_code=401, detail="Clerk token issuer is missing.")
-
-        jwks_url = CLERK_JWKS_URL or f"{issuer.rstrip('/')}/.well-known/jwks.json"
-        signing_key = PyJWKClient(jwks_url).get_signing_key_from_jwt(token).key
-        options = {"verify_aud": bool(CLERK_AUDIENCE)}
-        return jwt.decode(
-            token,
-            signing_key,
-            algorithms=["RS256"],
-            audience=CLERK_AUDIENCE,
-            issuer=issuer,
-            options=options,
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(
-            status_code=401,
-            detail=f"Clerk session token could not be verified. Check that the token belongs to your Clerk instance and that the backend can reach Clerk JWKS. Details: {exc}",
-        )
-
-
-async def _find_or_create_clerk_user(
-    clerk_id: str,
-    email: str = "",
-    name: str = "",
-    picture: str = "",
-):
-    users = users_col()
-    clean_email = email.strip().lower()
-
-    user = await users.find_one({"clerkId": clerk_id})
-    if not user and clean_email:
-        user = await users.find_one({"email": clean_email})
-        if user:
-            update: dict = {"clerkId": clerk_id}
-            if name and not user.get("name"):
-                update["name"] = name
-            if picture and not user.get("picture"):
-                update["picture"] = picture
-            await users.update_one({"_id": user["_id"]}, {"$set": update})
-            user = await users.find_one({"_id": user["_id"]})
-
-    if not user and clean_email:
-        doc = {
-            "clerkId": clerk_id,
-            "email": clean_email,
-            "name": name or clean_email.split("@")[0],
-            "picture": picture or f"https://api.dicebear.com/7.x/identicon/svg?seed={clean_email}",
-            "resumeData": None,
-            "settings": None,
-        }
-        result = await users.insert_one(doc)
-        user = await users.find_one({"_id": result.inserted_id})
-
-    return user
-
-
-async def get_current_user(
-    authorization: Optional[str] = Header(None),
-    x_clerk_email: Optional[str] = Header(None),
-    x_clerk_name: Optional[str] = Header(None),
-    x_clerk_picture: Optional[str] = Header(None),
-):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Unauthorized session credentials.")
-
-    token = authorization.split(" ", 1)[1].strip()
-    users = users_col()
-    user = None
-
-    if token.startswith("session-"):
-        user = await users.find_one({"sessionToken": token})
-    else:
-        claims = _verify_clerk_token(token)
-        clerk_id = claims.get("sub")
-        if not clerk_id:
-            raise HTTPException(status_code=401, detail="Clerk token subject is missing.")
-        email = (x_clerk_email or claims.get("email") or "").lower()
-        name = x_clerk_name or ""
-        picture = x_clerk_picture or ""
-        user = await _find_or_create_clerk_user(clerk_id, email, name, picture)
-
-    if not user:
-        raise HTTPException(status_code=401, detail="Expired or invalid session token.")
-
-    return user
-
-
-# ── Endpoint 1 — Google OAuth URL ─────────────────────────────────────────────
-
-@app.get("/api/auth/google/url")
-async def google_auth_url(request: Request):
-    client_id = os.getenv("GOOGLE_CLIENT_ID")
-    if not client_id:
-        raise HTTPException(status_code=404, detail="Google Client ID is not configured.")
-
-    params = {
-        "client_id": client_id,
-        "redirect_uri": _get_redirect_uri(request),
-        "response_type": "code",
-        "scope": "https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email",
-        "access_type": "offline",
-        "prompt": "consent",
-    }
-    from urllib.parse import urlencode
-    url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
-    return {"url": url}
-
-
-# ── Endpoint 2 — Google OAuth callback ────────────────────────────────────────
-
-@app.get("/api/auth/google/callback", response_class=HTMLResponse)
-async def google_auth_callback(request: Request, code: Optional[str] = None):
-    if not code:
-        return HTMLResponse(content="""<html><body><script>
-            window.opener.postMessage({type:"OAUTH_AUTH_FAILURE",error:"No authorization code returned."},"*");
-            window.close();
-        </script></body></html>""")
-
-    try:
-        client_id = os.getenv("GOOGLE_CLIENT_ID", "")
-        client_secret = os.getenv("GOOGLE_CLIENT_SECRET", "")
-
-        async with httpx.AsyncClient() as client:
-            token_resp = await client.post(
-                "https://oauth2.googleapis.com/token",
-                data={
-                    "code": code,
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "redirect_uri": _get_redirect_uri(request),
-                    "grant_type": "authorization_code",
-                },
-            )
-        token_data = token_resp.json()
-        if not token_resp.is_success:
-            raise ValueError(token_data.get("error_description") or token_data.get("error") or "Token exchange failed.")
-
-        async with httpx.AsyncClient() as client:
-            user_resp = await client.get(
-                "https://www.googleapis.com/oauth2/v3/userinfo",
-                headers={"Authorization": f"Bearer {token_data['access_token']}"},
-            )
-        profile = user_resp.json()
-        if not user_resp.is_success:
-            raise ValueError("Failed to retrieve Google userinfo.")
-
-        email = profile["email"].lower()
-        session_token = f"session-{secrets.token_hex(16)}"
-        users = users_col()
-
-        user = await users.find_one({"email": email})
-        if not user:
-            doc = {
-                "email": email,
-                "googleId": profile.get("sub"),
-                "name": profile.get("name") or email.split("@")[0],
-                "picture": profile.get("picture", ""),
-                "sessionToken": session_token,
-                "resumeData": None,
-                "settings": None,
-            }
-            result = await users.insert_one(doc)
-            user = await users.find_one({"_id": result.inserted_id})
-        else:
-            await users.update_one(
-                {"_id": user["_id"]},
-                {"$set": {
-                    "name": profile.get("name") or user.get("name"),
-                    "picture": profile.get("picture") or user.get("picture"),
-                    "googleId": profile.get("sub") or user.get("googleId"),
-                    "sessionToken": session_token,
-                }},
-            )
-
-        name_escaped = (user.get("name") or "").replace('"', '\\"')
-        return HTMLResponse(content=f"""<html><body><script>
-            if(window.opener){{
-                window.opener.postMessage({{
-                    type:"OAUTH_AUTH_SUCCESS",
-                    data:{{
-                        token:"{session_token}",
-                        user:{{email:"{email}",name:"{name_escaped}",picture:"{user.get('picture','')}"}}
-                    }}
-                }},"*");
-                window.close();
-            }} else {{ window.location.href="/"; }}
-        </script><p style="font-family:sans-serif;text-align:center;margin-top:50px;">Verified! This window will close.</p></body></html>""")
-
-    except Exception as exc:
-        msg = str(exc).replace('"', '\\"')
-        return HTMLResponse(content=f"""<html><body><script>
-            window.opener.postMessage({{type:"OAUTH_AUTH_FAILURE",error:"{msg}"}},"*");
-            window.close();
-        </script></body></html>""")
-
-
-# ── Endpoint 3 — Verify Clerk user ────────────────────────────────────────────
-
-@app.post("/api/auth/verify-clerk")
-async def verify_clerk(body: VerifyClerkRequest, authorization: Optional[str] = Header(None)):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing Clerk session token.")
-
-    claims = _verify_clerk_token(authorization.split(" ", 1)[1].strip())
-    clerk_id = claims.get("sub")
-    if not clerk_id:
-        raise HTTPException(status_code=401, detail="Clerk token subject is missing.")
-
-    clean_email = body.email.strip().lower()
-    if not clean_email:
-        clean_email = (claims.get("email") or claims.get("primary_email_address") or "").strip().lower()
-    if not clean_email:
-        raise HTTPException(status_code=400, detail="Clerk profile email is missing.")
-
-    users = users_col()
-
-    user = await users.find_one({"clerkId": clerk_id})
-    if not user and clean_email:
-        user = await users.find_one({"email": clean_email})
-
-    if user:
-        update: dict = {}
-        if not user.get("clerkId"):
-            update["clerkId"] = clerk_id
-        if body.name and not user.get("name"):
-            update["name"] = body.name
-        if body.picture and not user.get("picture"):
-            update["picture"] = body.picture
-        if update:
-            await users.update_one({"_id": user["_id"]}, {"$set": update})
-            user = await users.find_one({"_id": user["_id"]})
-    else:
-        doc = {
-            "clerkId": clerk_id,
-            "email": clean_email,
-            "name": body.name.strip() if body.name else clean_email.split("@")[0],
-            "picture": body.picture or f"https://api.dicebear.com/7.x/identicon/svg?seed={clean_email}",
-            "resumeData": None,
-            "settings": None,
-        }
-        result = await users.insert_one(doc)
-        user = await users.find_one({"_id": result.inserted_id})
-
-    return {
-        "success": True,
-        "user": {
-            "email": user["email"],
-            "name": user.get("name") or "",
-            "picture": user.get("picture") or "",
-        },
-    }
-
-
-# ── Endpoint 4 — GET resume ────────────────────────────────────────────────────
-
-@app.get("/api/resume")
-async def get_resume(current_user: dict = Depends(get_current_user)):
-    return {
-        "resumeData": current_user.get("resumeData"),
-        "settings": current_user.get("settings"),
-    }
-
-
-# ── Endpoint 5 — POST resume (save) ───────────────────────────────────────────
-
-@app.post("/api/resume")
-async def save_resume(body: SaveResumeRequest, current_user: dict = Depends(get_current_user)):
-    await users_col().update_one(
-        {"_id": current_user["_id"]},
-        {"$set": {"resumeData": body.resumeData, "settings": body.settings}},
-    )
-    return {"success": True, "message": "Resume saved to MongoDB successfully."}
-
-
-# ── Endpoint 6 — POST score (Gemini AI) ───────────────────────────────────────
-
 @app.post("/api/score")
 async def score_resume(body: ScoreRequest):
     if not body.jd.strip():
@@ -463,7 +136,7 @@ RULES:
   - actions: append_skills | insert_bullet | replace_bullet | add_item | modify_item
   - ALL bullet suggestedContent MUST include a % / $ / hrs / x metric.
   - Prefer vault items over AI crafting. Mark AI-crafted ones in archiveItemSource.
-  - append_skills → add to skills section only; add_item → new project/experience entry.
+  - append_skills -> add to skills section only; add_item -> new project/experience entry.
 
 RESUME:
 {active_resume_text}
@@ -502,8 +175,12 @@ VAULT:
         raise HTTPException(status_code=500, detail=f"Failed to parse Gemini response: {exc}")
 
 
-# ── Healthcheck ────────────────────────────────────────────────────────────────
-
 @app.get("/api/health")
 async def health():
     return {"status": "healthy"}
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(_, exc):
+    print("Unhandled backend error:", exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error."})

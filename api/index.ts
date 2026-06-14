@@ -1,21 +1,10 @@
-// Vercel Serverless Function entry point.
-// This file mirrors server.ts but exports the Express app instead of calling
-// app.listen() so Vercel can invoke it as a serverless function.
-// Vite / static-file serving is handled by Vercel's CDN; it is NOT included here.
-
-import crypto from "crypto";
 import dotenv from "dotenv";
 import express from "express";
 import { GoogleGenAI, Type } from "@google/genai";
-import { connectDB, User } from "../server/mongodb";
 
 dotenv.config();
 
 const GEMINI_TIMEOUT_MS = 60000;
-
-// ---------------------------------------------------------------------------
-// Helpers (shared with server.ts)
-// ---------------------------------------------------------------------------
 
 function trimText(value: unknown, maxLength: number): string {
   if (typeof value !== "string") return "";
@@ -71,225 +60,8 @@ function buildCompactResumeContext(resumeData: any) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// App
-// ---------------------------------------------------------------------------
-
 const app = express();
 app.use(express.json({ limit: "15mb" }));
-
-// Lazily connect to MongoDB once per warm serverless instance.
-app.use(async (_req, _res, next) => {
-  try {
-    await connectDB();
-  } catch (err) {
-    console.error("DB connection warning:", err);
-  }
-  next();
-});
-
-// ---------------------------------------------------------------------------
-// OAuth helpers
-// ---------------------------------------------------------------------------
-
-const getRedirectUri = (req: express.Request) => {
-  const host = req.headers.host || "localhost:3000";
-  const isLocal = host.includes("localhost") || host.includes("127.0.0.1");
-  const protocol =
-    !isLocal && (req.secure || req.headers["x-forwarded-proto"] === "https") ? "https" : "http";
-  return `${protocol}://${host}/api/auth/google/callback`;
-};
-
-// ---------------------------------------------------------------------------
-// Endpoint 1 — Google OAuth URL
-// ---------------------------------------------------------------------------
-
-app.get("/api/auth/google/url", (req, res) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  if (!clientId) {
-    return res.status(404).json({ error: "Google Client ID is not configured." });
-  }
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: getRedirectUri(req),
-    response_type: "code",
-    scope:
-      "https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email",
-    access_type: "offline",
-    prompt: "consent",
-  });
-  res.json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}` });
-});
-
-// ---------------------------------------------------------------------------
-// Endpoint 2 — Google OAuth callback
-// ---------------------------------------------------------------------------
-
-app.get("/api/auth/google/callback", async (req, res) => {
-  const { code } = req.query;
-  if (!code) {
-    return res.send(`<html><body><script>
-      window.opener.postMessage({ type:"OAUTH_AUTH_FAILURE", error:"No authorization code returned." },"*");
-      window.close();
-    </script></body></html>`);
-  }
-  try {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code: code as string,
-        client_id: clientId || "",
-        client_secret: clientSecret || "",
-        redirect_uri: getRedirectUri(req),
-        grant_type: "authorization_code",
-      }),
-    });
-    const tokenData = await tokenResponse.json();
-    if (!tokenResponse.ok) throw new Error(tokenData.error_description || tokenData.error || "Failed to exchange token");
-
-    const userResponse = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` },
-    });
-    const profileData = await userResponse.json();
-    if (!userResponse.ok) throw new Error("Failed to retrieve Google userinfo.");
-
-    const email = profileData.email.toLowerCase();
-    const sessionToken = `session-${crypto.randomUUID()}`;
-    let userDoc = await User.findOne({ email });
-    if (!userDoc) {
-      userDoc = new User({ email, googleId: profileData.sub, name: profileData.name || email.split("@")[0], picture: profileData.picture || "" });
-    } else {
-      userDoc.name = profileData.name || userDoc.name;
-      userDoc.picture = profileData.picture || userDoc.picture;
-      userDoc.googleId = profileData.sub || userDoc.googleId;
-    }
-    userDoc.sessionToken = sessionToken;
-    userDoc.set("sessionToken", sessionToken);
-    await userDoc.save();
-
-    return res.send(`<html><body><script>
-      if(window.opener){
-        window.opener.postMessage({type:"OAUTH_AUTH_SUCCESS",data:{token:"${sessionToken}",user:{email:"${userDoc.email}",name:"${userDoc.name.replace(/"/g, '\\"')}",picture:"${userDoc.picture}"}}},"*");
-        window.close();
-      } else { window.location.href="/"; }
-    </script><p style="font-family:sans-serif;text-align:center;margin-top:50px;">Auth verified! Window closing…</p></body></html>`);
-  } catch (err: any) {
-    console.error("Google OAuth error:", err);
-    return res.send(`<html><body><script>
-      window.opener.postMessage({type:"OAUTH_AUTH_FAILURE",error:"${err.message || 'System verification error.'}"}, "*");
-      window.close();
-    </script></body></html>`);
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Endpoint 3 — Verify Clerk user
-// ---------------------------------------------------------------------------
-
-app.post("/api/auth/verify-clerk", async (req, res) => {
-  try {
-    const { clerkId, email, name, picture, action } = req.body;
-    if (!clerkId) return res.status(400).json({ error: "Missing Clerk User Identifier." });
-
-    const cleanEmail = (email || "").trim().toLowerCase();
-    let userDoc = await User.findOne({ clerkId });
-    if (!userDoc && cleanEmail) userDoc = await User.findOne({ email: cleanEmail });
-
-    if (action === "login") {
-      if (!userDoc) return res.status(400).json({ error: "Account does not exist. Please register first." });
-      if (!userDoc.clerkId) userDoc.clerkId = clerkId;
-      if (name && !userDoc.name) userDoc.name = name;
-      if (picture && !userDoc.picture) userDoc.picture = picture;
-      await userDoc.save();
-    } else if (action === "register") {
-      if (userDoc) return res.status(400).json({ error: "Account already exists. Please sign in instead." });
-      userDoc = new User({
-        clerkId,
-        email: cleanEmail,
-        name: name ? name.trim() : cleanEmail.split("@")[0],
-        picture: picture || `https://api.dicebear.com/7.x/identicon/svg?seed=${cleanEmail}`,
-      });
-      await userDoc.save();
-    }
-
-    res.json({ success: true, user: { email: userDoc.email, name: userDoc.name, picture: userDoc.picture } });
-  } catch (err: any) {
-    console.error("Clerk pre-verification error:", err);
-    res.status(500).json({ error: "Failed to verify workspace credentials." });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Auth middleware
-// ---------------------------------------------------------------------------
-
-const authMiddleware = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith("Bearer ")) return res.status(401).json({ error: "Unauthorized session credentials." });
-
-    const token = authHeader.split(" ")[1];
-    let user = null;
-
-    if (token && (token.startsWith("user_") || req.headers["x-clerk-email"])) {
-      const email = ((req.headers["x-clerk-email"] as string) || "").toLowerCase();
-      const name = (req.headers["x-clerk-name"] as string) || "";
-      const picture = (req.headers["x-clerk-picture"] as string) || "";
-      user = await User.findOne({ clerkId: token });
-      if (!user && email) {
-        user = await User.findOne({ email });
-        if (user) { user.clerkId = token; if (name && !user.name) user.name = name; if (picture && !user.picture) user.picture = picture; await user.save(); }
-      }
-      if (!user && email) {
-        user = new User({ clerkId: token, email, name: name || email.split("@")[0], picture: picture || `https://api.dicebear.com/7.x/identicon/svg?seed=${email}` });
-        await user.save();
-      }
-    }
-
-    if (!user) return res.status(401).json({ error: "Expired or invalid session token." });
-    (req as any).user = user;
-    next();
-  } catch (err) {
-    console.error("Auth middleware error:", err);
-    res.status(500).json({ error: "Server authentication error." });
-  }
-};
-
-// ---------------------------------------------------------------------------
-// Endpoint 4 — GET resume
-// ---------------------------------------------------------------------------
-
-app.get("/api/resume", authMiddleware, async (req: any, res) => {
-  try {
-    res.json({ resumeData: req.user.resumeData, settings: req.user.settings });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to load backup data from MongoDB Atlas." });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Endpoint 5 — POST resume (save)
-// ---------------------------------------------------------------------------
-
-app.post("/api/resume", authMiddleware, async (req: any, res) => {
-  try {
-    const { resumeData, settings } = req.body;
-    req.user.resumeData = resumeData;
-    req.user.settings = settings;
-    await req.user.save();
-    res.json({ success: true, message: "Resume saved to MongoDB successfully." });
-  } catch (err) {
-    console.error("Save state error:", err);
-    res.status(500).json({ error: "Failed to save data. Please check MongoDB logs." });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Endpoint 6 — POST score (Gemini AI)
-// ---------------------------------------------------------------------------
 
 app.post("/api/score", async (req, res) => {
   try {
@@ -300,7 +72,6 @@ app.post("/api/score", async (req, res) => {
     if (!apiKey) return res.status(500).json({ error: "GEMINI_API_KEY environment variable is missing on the server." });
 
     const ai = new GoogleGenAI({ apiKey, httpOptions: { headers: { "User-Agent": "aistudio-build" } } });
-
     const compactResume = buildCompactResumeContext(resumeData);
     const activeResumeText = JSON.stringify({
       personalInfo: compactResume.personalInfo,
@@ -322,7 +93,7 @@ RULES:
   - actions: append_skills | insert_bullet | replace_bullet | add_item | modify_item
   - ALL bullet suggestedContent MUST include a % / $ / hrs / x metric.
   - Prefer vault items over AI crafting. Mark AI-crafted ones in archiveItemSource.
-  - append_skills → add to skills section only; add_item → new project/experience entry.
+  - append_skills -> add to skills section only; add_item -> new project/experience entry.
 
 RESUME:
 ${activeResumeText}
@@ -395,10 +166,6 @@ ${careerVaultText}
     res.status(500).json({ error: err.message || "An unexpected error occurred during resume evaluation." });
   }
 });
-
-// ---------------------------------------------------------------------------
-// Healthcheck
-// ---------------------------------------------------------------------------
 
 app.get("/api/health", (_req, res) => res.json({ status: "healthy" }));
 

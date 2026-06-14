@@ -28,17 +28,11 @@ import {
   ExternalLink,
   Undo,
   Redo,
-  Cloud,
-  Save
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { ResumeData, PageSettings, EducationEntry, ExperienceEntry, ProjectEntry, TechnicalSkill, VaultItem } from "./types";
 import { initialResumeData, defaultSettings } from "./initialState";
 import { generateLatex } from "./latexGenerator";
-import LandingPage from "./components/LandingPage";
-
-import { useUser, useAuth } from "@clerk/clerk-react";
-
 // Base URL for the FastAPI backend. Set VITE_API_URL in .env to point at a
 // separately hosted backend (e.g. https://api.yoursite.com). Leave empty to
 // call relative paths on the same host.
@@ -49,201 +43,17 @@ const API_BASE = (
   ""
 ).replace(/\/$/, "");
 
-const readApiJson = async (response: Response) => {
-  try {
-    return await response.json();
-  } catch {
-    return {};
-  }
-};
-
-const getApiError = (data: any, fallback: string) => {
-  return data?.error || data?.detail || data?.message || fallback;
-};
-
 export default function App() {
   // State for resume data and settings
   const [resumeData, setResumeData] = useState<ResumeData>(initialResumeData);
   const [settings, setSettings] = useState<PageSettings>(defaultSettings);
   
-  // Clerk Hook Integrations
-  const { isLoaded: isClerkLoaded, isSignedIn: isClerkSignedIn, user: clerkUser } = useUser();
-  const { signOut: clerkSignOut, getToken: getClerkToken } = useAuth();
-
-  // User Authentication and MongoDB states
-  const [user, setUser] = useState<{ email: string; name: string; picture: string } | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [showLanding, setShowLanding] = useState<boolean>(true);
-  const [cloudSaveStatus, setCloudSaveStatus] = useState<"synced" | "saving" | "error" | "unsaved" | "none">("none");
-  const [clerkError, setClerkError] = useState<string>("");
-  const [isVerifying, setIsVerifying] = useState<boolean>(false);
-  const isInitialLoadDone = useRef<boolean>(false);
-
-  // Synchronize Clerk state with local application authentication context and perform pre-verification
-  useEffect(() => {
-    if (isClerkLoaded) {
-      if (isClerkSignedIn && clerkUser) {
-        const verifyUser = async () => {
-          setIsVerifying(true);
-          try {
-            const email = clerkUser.primaryEmailAddress?.emailAddress || "";
-            const name = clerkUser.fullName || clerkUser.username || email.split("@")[0] || "";
-            const picture = clerkUser.imageUrl || "";
-            const action = localStorage.getItem("clerk_auth_action") || "login";
-
-            const sessionToken = await getClerkToken();
-            if (!sessionToken) {
-              throw new Error("Clerk session token is not available yet.");
-            }
-
-            const res = await fetch(`${API_BASE}/api/auth/verify-clerk`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${sessionToken}`
-              },
-              body: JSON.stringify({
-                email,
-                name,
-                picture,
-                action
-              })
-            });
-
-            const data = await readApiJson(res);
-            if (res.ok) {
-              const verifiedUser = data.user || { email, name, picture };
-              setUser(verifiedUser);
-              setToken(sessionToken);
-              setShowLanding(false);
-              setClerkError("");
-            } else {
-              setClerkError(getApiError(data, "Verification failed."));
-              setUser(null);
-              setToken(null);
-              setShowLanding(true);
-              try {
-                await clerkSignOut();
-              } catch (errSig) {
-                console.error("Clerk pre-verification sign out error:", errSig);
-              }
-            }
-          } catch (err: any) {
-            console.error("Clerk pre-verification check failed:", err);
-            setClerkError(
-              `Could not reach the backend at ${API_BASE || "the current host"}. ${err?.message || "Please make sure the FastAPI server is running."}`
-            );
-            setUser(null);
-            setToken(null);
-            setShowLanding(true);
-            try {
-              await clerkSignOut();
-            } catch (errSig) {}
-          } finally {
-            setIsVerifying(false);
-          }
-        };
-
-        verifyUser();
-      } else {
-        setUser(null);
-        setToken(null);
-        setShowLanding(true);
-      }
-    }
-  }, [isClerkLoaded, isClerkSignedIn, clerkUser, getClerkToken]);
-
-  // General auth headers provider that dynamically passes Clerk identifiers
-  const getAuthHeaders = async () => {
-    const sessionToken = isClerkSignedIn ? await getClerkToken() : token;
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${sessionToken || ""}`
-    };
-    if (user) {
-      headers["x-clerk-email"] = user.email;
-      headers["x-clerk-name"] = user.name;
-      headers["x-clerk-picture"] = user.picture;
-    }
-    return headers;
-  };
-
-  // Fetch initial profile/resume data from MongoDB Atlas on cold start
-  useEffect(() => {
-    if (!token) {
-      isInitialLoadDone.current = false;
-      return;
-    }
-    const fetchCloudData = async () => {
-      try {
-        setCloudSaveStatus("saving");
-        const res = await fetch(`${API_BASE}/api/resume`, {
-          headers: await getAuthHeaders()
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.resumeData) {
-            setResumeData(data.resumeData);
-          }
-          if (data.settings) {
-            setSettings(data.settings);
-          }
-          setCloudSaveStatus("synced");
-        } else {
-          // If session expired (e.g. server restarted and removed document), log out
-          if (res.status === 401) {
-            handleLogout();
-          } else {
-            setCloudSaveStatus("error");
-          }
-        }
-      } catch (err) {
-        console.error("Cold start fetch error:", err);
-        setCloudSaveStatus("error");
-      } finally {
-        setTimeout(() => {
-          isInitialLoadDone.current = true;
-        }, 400);
-      }
-    };
-    fetchCloudData();
-  }, [token]);
-
-  // Track any resume or settings modifications after initial load and flag them as unsaved
-  useEffect(() => {
-    if (!token || !isInitialLoadDone.current) return;
-    setCloudSaveStatus("unsaved");
-  }, [resumeData, settings, token]);
-
-  // Manual Cloud Save to MongoDB Atlas on action
-  const handleCloudSave = async () => {
-    if (!token) return;
-    setCloudSaveStatus("saving");
-    try {
-      const res = await fetch(`${API_BASE}/api/resume`, {
-        method: "POST",
-        headers: await getAuthHeaders(),
-        body: JSON.stringify({ resumeData, settings })
-      });
-      if (res.ok) {
-        setCloudSaveStatus("synced");
-      } else {
-        setCloudSaveStatus("error");
-      }
-    } catch (err) {
-      console.error("Cloud manual save error:", err);
-      setCloudSaveStatus("error");
-    }
-  };
-
   // Keyboard shortcut Ctrl+S / Cmd+S integration
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        if (token) {
-          handleCloudSave();
-        }
+        handleExportJson();
       }
     };
 
@@ -251,31 +61,7 @@ export default function App() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [token, resumeData, settings]);
-
-  const handleLoginSuccess = async (newToken: string, newUser: { email: string; name: string; picture: string }) => {
-    localStorage.setItem("satya_resume_token", newToken);
-    localStorage.setItem("satya_resume_user", JSON.stringify(newUser));
-    setToken(newToken);
-    setUser(newUser);
-    setShowLanding(false);
-  };
-
-  const handleLogout = async () => {
-    if (isClerkSignedIn) {
-      try {
-        await clerkSignOut();
-      } catch (e) {
-        console.error("Clerk sign-out warning:", e);
-      }
-    }
-    localStorage.removeItem("satya_resume_token");
-    localStorage.removeItem("satya_resume_user");
-    setToken(null);
-    setUser(null);
-    setShowLanding(true);
-    setCloudSaveStatus("none");
-  };
+  }, [resumeData, settings]);
 
   
   // Undo/Redo history stack
@@ -1042,18 +828,6 @@ export default function App() {
         ? "font-lora tracking-tight"
         : "font-sans antialiased";
 
-  if (showLanding) {
-    return (
-      <LandingPage 
-        clerkError={clerkError} 
-        setClerkError={clerkError => {
-          setClerkError(clerkError);
-        }} 
-        isVerifying={isVerifying} 
-      />
-    );
-  }
-
   return (
     <div className="flex flex-col min-h-screen md:h-screen bg-[#07080B] text-zinc-200 font-sans md:overflow-hidden overflow-y-auto">
       
@@ -1074,57 +848,11 @@ export default function App() {
             </h1>
             <div className="flex items-center gap-2 mt-0.5 max-sm:flex-col max-sm:items-start">
               <p className="text-[10px] font-mono text-zinc-400 hidden sm:block tracking-wide uppercase">Automate professional academic resumes with typographic symmetry</p>
-              
-              {/* MongoDB Cloud Save status indicators */}
-              {user && (
-                <span className="inline-flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-wider border border-zinc-800/80 bg-zinc-950 px-2 py-0.5 rounded-none text-zinc-400">
-                  {cloudSaveStatus === "saving" && (
-                    <>
-                      <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 animate-pulse" />
-                      Saving...
-                    </>
-                  )}
-                  {cloudSaveStatus === "synced" && (
-                    <>
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      Cloud Synced
-                    </>
-                  )}
-                  {cloudSaveStatus === "unsaved" && (
-                    <>
-                      <span className="w-1.5 h-1.5 rounded-full bg-yellow-500/80 animate-pulse" />
-                      Unsaved Changes
-                    </>
-                  )}
-                  {cloudSaveStatus === "error" && (
-                    <>
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
-                      Sync Error
-                    </>
-                  )}
-                </span>
-              )}
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-2 mt-2 sm:mt-0 flex-wrap">
-          {user && (
-            <button
-              onClick={handleCloudSave}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono font-bold rounded-none transition cursor-pointer ${
-                cloudSaveStatus === "unsaved"
-                  ? "bg-yellow-500 hover:bg-yellow-450 text-black border border-yellow-600 shadow-[0_0_8px_rgba(234,179,8,0.1)]"
-                  : "bg-zinc-950 hover:bg-zinc-900 text-zinc-300 border border-zinc-805"
-              }`}
-              title="Save your progress to MongoDB database (Ctrl + S)"
-              disabled={cloudSaveStatus === "saving"}
-            >
-              <Save className={`w-3.5 h-3.5 ${cloudSaveStatus === "unsaved" ? "text-neutral-900 animate-bounce" : "text-yellow-500"}`} />
-              {cloudSaveStatus === "saving" ? "Saving..." : cloudSaveStatus === "unsaved" ? "Save (Ctrl+S)" : "Saved to Cloud"}
-            </button>
-          )}
-
           <button
             onClick={handleReset}
             className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono font-medium rounded-none bg-zinc-950 hover:bg-zinc-900 text-zinc-300 border border-zinc-800 transition"
@@ -1169,33 +897,6 @@ export default function App() {
             <ExternalLink className="w-3.5 h-3.5 text-emerald-300" />
             Open in Overleaf
           </button>
-
-          {/* User profile capsule and logout button */}
-          {user && (
-            <div className="flex items-center gap-2 pl-3 ml-1 border-l border-zinc-800 shrink-0">
-              <img
-                src={user.picture || `https://api.dicebear.com/7.x/identicon/svg?seed=${user.email}`}
-                alt={user.name}
-                className="w-6 h-6 rounded-none border border-zinc-750"
-                referrerPolicy="no-referrer"
-              />
-              <div className="hidden lg:flex flex-col text-left">
-                <span className="text-[10px] font-mono font-extrabold text-zinc-200 truncate max-w-[110px]" title={user.name}>
-                  {user.name}
-                </span>
-                <span className="text-[8px] font-mono text-zinc-550 truncate max-w-[110px]" title={user.email}>
-                  {user.email}
-                </span>
-              </div>
-              <button
-                onClick={handleLogout}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] font-mono font-bold uppercase rounded-none bg-zinc-950 hover:bg-zinc-900 text-zinc-400 hover:text-zinc-200 border border-zinc-800 transition cursor-pointer"
-                title="Sign out of current workspace"
-              >
-                Sign Out
-              </button>
-            </div>
-          )}
         </div>
       </header>
 

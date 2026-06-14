@@ -80,7 +80,7 @@ export const initialResumeData: ResumeData = {
       title: "Arka AI -- AI-Powered Collaborative Architecture Workspace",
       description: "Unified realtime platform replacing disconnected whiteboards, docs, and chat for software system planning.",
       dates: "",
-      technologies: "React 19, Vite, Tailwind CSS v4, Clerk, Liveblocks, React Flow, FastAPI, MongoDB, Trigger.dev, Groq, Vercel Blob",
+      technologies: "React 19, Vite, Tailwind CSS v4, Liveblocks, React Flow, FastAPI, MongoDB, Trigger.dev, Groq, Vercel Blob",
       bullets: [
         "Eliminated tool-switching across Figma, Notion, and Slack---Arka AI collapses them into one shared workspace where teams go from idea to structured spec without leaving the tab.",
         "Built live multi-user canvas with real-time sync (Liveblocks, React Flow); Groq-powered AI reads canvas state and auto-generates feature specs, cutting spec-writing from hours to minutes.",
