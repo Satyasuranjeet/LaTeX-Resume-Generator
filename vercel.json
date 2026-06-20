@@ -1,16 +1,16 @@
 {
   "version": 2,
-  "buildCommand": "vite build",
-  "outputDirectory": "dist",
+  "buildCommand": "cd client && npm install && npm run build",
+  "outputDirectory": "client/dist",
   "framework": null,
   "functions": {
-    "api/index.ts": {
+    "server/api/index.ts": {
       "memory": 1024,
       "maxDuration": 60
     }
   },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" },
+    { "source": "/api/(.*)", "destination": "/server/api/index" },
     { "source": "/(.*)",     "destination": "/index.html" }
   ]
 }
