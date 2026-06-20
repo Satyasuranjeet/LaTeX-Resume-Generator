@@ -7,7 +7,7 @@ An interactive, AI-powered resume builder that produces publication-ready LaTeX 
 ## Features
 
 - **Live LaTeX Preview** — Instant A4 / Letter rendering as you type, with margin and font controls
-- **AI ATS Scorer** — Paste any job description and Gemini 2.0 Flash scores your resume, identifies gaps, and injects metric-driven bullet suggestions directly into the editor
+- **AI ATS Scorer** — Paste any job description and Gemini 2.5 Flash scores your resume, identifies gaps, and injects metric-driven bullet suggestions directly into the editor
 - **Career Vault** — Archive past projects, roles, and certifications; the AI pulls from it automatically when tailoring
 - **Cloud Sync** — Resume data and settings auto-save to MongoDB Atlas (Ctrl+S / ⌘S)
 - **Clerk Auth** — Secure sign-up / sign-in with Google OAuth fallback
@@ -16,151 +16,135 @@ An interactive, AI-powered resume builder that produces publication-ready LaTeX 
 
 ---
 
+## Project Structure
+
+```text
+├── client/              # React Frontend (Vite, TypeScript, TailwindCSS v4)
+├── server/              # FastAPI Backend (Python, Motor, Google-GenAI SDK)
+├── vercel.json          # Root-level Vercel configuration for unified monorepo deployment
+└── README.md            # Project documentation
+```
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | React 19, TypeScript, Tailwind CSS v4, Framer Motion |
-| Backend | Node.js, Express, tsx (dev) / esbuild (prod) |
-| AI | Google Gemini 2.0 Flash via `@google/genai` |
-| Auth | Clerk (`@clerk/clerk-react`) + Google OAuth 2.0 |
-| Database | MongoDB Atlas via Mongoose |
+| Frontend | React 19, TypeScript, Tailwind CSS v4, Framer Motion, Clerk Auth Client |
+| Backend | Python 3.10+, FastAPI, Motor (Async MongoDB), PyJWT (Clerk JWT Auth verification) |
+| AI | Google Gemini 2.5 Flash via `google-genai` Python SDK |
+| Auth | Clerk JWT validation + User profile synchronization |
+| Database | MongoDB Atlas via Motor |
 | Build | Vite 6 |
 
 ---
 
 ## Prerequisites
 
-- **Node.js** ≥ 18
+- **Node.js** ≥ 18 (for the client)
+- **Python** ≥ 3.10 (for the server)
 - A **MongoDB Atlas** cluster (free tier works)
-- A **Clerk** account — [clerk.com](https://clerk.com)
+- A **Clerk** developer account — [clerk.com](https://clerk.com)
 - A **Google Gemini API key** — [aistudio.google.com](https://aistudio.google.com)
-- *(Optional)* A **Google OAuth 2.0** client for Google sign-in
 
 ---
 
 ## Local Development
 
-**1. Clone and install**
+### 1. Backend (FastAPI Server)
 
-```bash
-git clone <your-repo-url>
-cd latex-resume-generator
-npm install
-```
+1. Navigate to the `server/` directory:
+   ```bash
+   cd server
+   ```
+2. Create and activate a Python virtual environment:
+   ```bash
+   python -m venv venv
+   # On Windows:
+   .\venv\Scripts\activate
+   # On macOS/Linux:
+   source venv/bin/activate
+   ```
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. Copy the environment variables example and configure your variables:
+   ```bash
+   copy .env.example .env   # Windows
+   cp .env.example .env     # macOS/Linux
+   ```
+5. Run the FastAPI development server:
+   ```bash
+   uvicorn main:app --reload --port 8000
+   ```
+   The backend API will be available at [http://localhost:8000](http://localhost:8000).
 
-**2. Configure environment variables**
+### 2. Frontend (React Client)
 
-Copy the example below into a `.env` file at the project root:
-
-```env
-# Required — Gemini AI
-GEMINI_API_KEY=your_gemini_api_key_here
-
-# Required — MongoDB Atlas connection string
-MONGODB_URI=mongodb+srv://<user>:<password>@cluster0.xxxxx.mongodb.net/resume-builder
-
-# Required — Clerk publishable key (exposed to the browser via Vite)
-VITE_CLERK_PUBLISHABLE_KEY=pk_test_xxxxxxxxxxxxxxxxxxxx
-
-# Optional — Google OAuth (only needed if enabling Google sign-in)
-GOOGLE_CLIENT_ID=your_google_client_id
-GOOGLE_CLIENT_SECRET=your_google_client_secret
-
-# Optional — Public URL for OAuth redirect URIs (set in production)
-APP_URL=https://your-app-domain.com
-```
-
-**3. Run the dev server**
-
-```bash
-npm run dev
-```
-
-The Express + Vite server starts at [http://localhost:3000](http://localhost:3000).
-
----
-
-## Production Deployment
-
-**1. Build**
-
-```bash
-npm run build
-```
-
-This outputs:
-- `dist/` — compiled React frontend (served as static files)
-- `dist/server.cjs` — bundled Express server
-
-**2. Set environment variables on your host**
-
-Set the same variables from the `.env` section above as platform secrets / environment config. Make sure `NODE_ENV=production` is set so the server serves the static build instead of starting Vite.
-
-**3. Start**
-
-```bash
-node dist/server.cjs
-```
-
-The server listens on port `3000` by default. Put a reverse proxy (nginx, Caddy, or your cloud provider's load balancer) in front of it.
-
-### Deploy to Cloud Run / Railway / Render
-
-- Set all env vars in the platform's secrets panel
-- Build command: `npm install && npm run build`
-- Start command: `node dist/server.cjs`
-- Port: `3000`
-
-> **Clerk redirect URLs** — Add your production domain to the allowed redirect origins in the Clerk dashboard under *Paths → Redirect URLs*.
-
-> **MongoDB Atlas network access** — Whitelist your server's outbound IP (or `0.0.0.0/0` for dynamic IPs) in Atlas → Network Access.
+1. Open a new terminal and navigate to the `client/` directory:
+   ```bash
+   cd client
+   ```
+2. Install npm packages:
+   ```bash
+   npm install
+   ```
+3. Run the Vite development server:
+   ```bash
+   npm run dev
+   ```
+   The frontend will be running at [http://localhost:5173](http://localhost:5173).
 
 ---
 
 ## Environment Variables Reference
 
-| Variable | Required | Description |
-|---|---|---|
-| `GEMINI_API_KEY` | ✅ | Google AI Studio API key for resume scoring |
-| `MONGODB_URI` | ✅ | MongoDB Atlas SRV connection string |
-| `VITE_CLERK_PUBLISHABLE_KEY` | ✅ | Clerk publishable key (prefix `VITE_` exposes it to the browser) |
-| `GOOGLE_CLIENT_ID` | Optional | Google OAuth 2.0 client ID |
-| `GOOGLE_CLIENT_SECRET` | Optional | Google OAuth 2.0 client secret |
-| `APP_URL` | Optional | Canonical app URL used in OAuth redirect URIs |
-| `NODE_ENV` | Optional | Set to `production` to serve the Vite build instead of running Vite middleware |
-| `MONGODB_DNS_SERVERS` | Optional | Comma-separated DNS servers for Atlas SRV lookup (default: `1.1.1.1,8.8.8.8`) |
+### Backend (`server/.env`)
+
+| Variable | Required | Description | Default / Example |
+|---|---|---|---|
+| `GEMINI_API_KEY` | ✅ | Google AI Studio API key for resume evaluation | `AIzaSy...` |
+| `MONGODB_URI` | ✅ | MongoDB Atlas connection string | `mongodb+srv://...` |
+| `CLERK_SECRET_KEY` | ✅ | Clerk Secret Key for REST API operations | `sk_test_...` |
+| `CLERK_JWKS_URL` | Optional | Clerk JWKS Endpoint URL for decoding JWT tokens | `https://<your-instance>.clerk.accounts.dev/.well-known/jwks.json` |
+
+### Frontend (`client/.env`)
+
+| Variable | Required | Description | Default / Example |
+|---|---|---|---|
+| `VITE_CLERK_PUBLISHABLE_KEY` | ✅ | Clerk Publishable Key (exposed to the browser) | `pk_test_...` |
+| `VITE_BACKEND_URL` | Optional | Custom backend API URL. Defaults to local server or relative path in production | `http://localhost:8000` |
 
 ---
 
-## Scripts
+## Production Deployment to Vercel
 
-| Command | Description |
-|---|---|
-| `npm run dev` | Start dev server (Express + Vite HMR) |
-| `npm run build` | Build frontend and bundle server for production |
-| `npm run lint` | TypeScript type-check |
-| `npm run clean` | Remove `dist/` |
+The application is fully pre-configured to deploy on Vercel. You have two options:
 
----
+### Option A: Unified Monorepo Deployment (Recommended)
+Deploying both frontend and backend as a single Vercel project:
 
-## Project Structure
+1. Import the root repository in the Vercel Dashboard.
+2. Vercel will automatically read the root-level [vercel.json](file:///d:/Projects/latex-resume-generator/vercel.json) to build:
+   - The React frontend at `client/` (static build outputting to `/`)
+   - The FastAPI backend at `server/` (compiled as `@vercel/python` serverless functions)
+3. Set your production Environment Variables on Vercel:
+   - `GEMINI_API_KEY`
+   - `MONGODB_URI`
+   - `CLERK_SECRET_KEY`
+   - `CLERK_JWKS_URL`
+   - `VITE_CLERK_PUBLISHABLE_KEY`
+4. Deploy. Vercel routes `/api/*` to the FastAPI backend and everything else to the frontend.
 
-```
-├── server.ts           # Express API + Vite dev middleware
-├── server/
-│   └── mongodb.ts      # Mongoose connection + User model
-├── src/
-│   ├── App.tsx         # Main editor, AI scorer, auth flow
-│   ├── latexGenerator.ts # Resume → LaTeX compiler
-│   ├── types.ts        # Shared TypeScript types
-│   ├── initialState.ts # Default resume template
-│   └── components/
-│       └── LandingPage.tsx  # Auth / sign-in page
-├── vite.config.ts
-├── tsconfig.json
-└── .env                # Local secrets (never commit)
-```
+### Option B: Separate Backend Deployment
+If you want to deploy the FastAPI server as a standalone backend service on Vercel:
+
+1. Create a new project in the Vercel Dashboard and point it to the repository.
+2. In the Project Settings, set the **Root Directory** to `server`.
+3. Set the Environment Variables (`GEMINI_API_KEY`, `MONGODB_URI`, `CLERK_SECRET_KEY`, `CLERK_JWKS_URL`).
+4. Vercel will parse [server/vercel.json](file:///d:/Projects/latex-resume-generator/server/vercel.json) and serve FastAPI as a Python serverless application.
 
 ---
 

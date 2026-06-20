@@ -15,25 +15,38 @@ _client: Optional[motor.motor_asyncio.AsyncIOMotorClient] = None
 _db = None
 
 
-async def connect_db() -> None:
+def get_db():
+    """Lazily initialize and return the database client."""
     global _client, _db
+    if _db is None:
+        try:
+            _client = motor.motor_asyncio.AsyncIOMotorClient(
+                MONGO_URI,
+                serverSelectionTimeoutMS=10_000,
+            )
+            parsed_uri = urlparse(MONGO_URI)
+            db_name = parsed_uri.path.strip("/") or "resume-builder"
+            _db = _client[db_name]
+        except Exception as exc:
+            print(f"MongoDB lazy initialization error: {exc}")
+            raise
+    return _db
+
+
+async def connect_db() -> None:
+    """Pre-initialize database and ping to verify connectivity on startup."""
     try:
-        _client = motor.motor_asyncio.AsyncIOMotorClient(
-            MONGO_URI,
-            serverSelectionTimeoutMS=10_000,
-        )
-        await _client.admin.command("ping")
-        # derive DB name from the URI path, defaulting to "resume-builder"
-        parsed_uri = urlparse(MONGO_URI)
-        db_name = parsed_uri.path.strip("/") or "resume-builder"
-        _db = _client[db_name]
-        print(f"MongoDB connected successfully -> {db_name}")
+        db = get_db()
+        if _client is not None:
+            await _client.admin.command("ping")
+            parsed_uri = urlparse(MONGO_URI)
+            db_name = parsed_uri.path.strip("/") or "resume-builder"
+            print(f"MongoDB connected successfully -> {db_name}")
     except Exception as exc:
-        print(f"MongoDB connection warning (server will still start): {exc}")
+        print(f"MongoDB startup connection warning: {exc}")
 
 
 def users_col():
-    """Return the users collection. Raises if DB is not yet initialised."""
-    if _db is None:
-        raise RuntimeError("Database not connected. Ensure connect_db() ran at startup.")
-    return _db["users"]
+    """Return the users collection. Lazily initializes if needed."""
+    db = get_db()
+    return db["users"]

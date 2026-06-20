@@ -84,7 +84,7 @@ class ProfileSaveRequest(BaseModel):
 security = HTTPBearer()
 
 CLERK_SECRET_KEY = os.getenv("CLERK_SECRET_KEY", "sk_test_TWPWnvnIN8vu42aGuNcpDLQ3LxX6f6KyW4DkseZlTV")
-CLERK_JWKS_URL = "https://worthy-magpie-21.clerk.accounts.dev/.well-known/jwks.json"
+CLERK_JWKS_URL = os.getenv("CLERK_JWKS_URL", "https://worthy-magpie-21.clerk.accounts.dev/.well-known/jwks.json")
 
 jwks_client = PyJWKClient(CLERK_JWKS_URL)
 
