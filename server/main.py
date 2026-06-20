@@ -144,6 +144,7 @@ def build_compact_resume(resume: dict) -> dict:
         },
         "education": [
             {
+                "id": str(e.get("id", "")),
                 "degree": _trim(e.get("degree"), 120),
                 "institution": _trim(e.get("institution"), 120),
                 "score": _trim(e.get("score"), 80),
@@ -153,6 +154,7 @@ def build_compact_resume(resume: dict) -> dict:
         ],
         "experience": [
             {
+                "id": str(e.get("id", "")),
                 "role": _trim(e.get("role"), 120),
                 "company": _trim(e.get("company"), 120),
                 "locationType": _trim(e.get("locationType"), 60),
@@ -163,6 +165,7 @@ def build_compact_resume(resume: dict) -> dict:
         ],
         "projects": [
             {
+                "id": str(e.get("id", "")),
                 "title": _trim(e.get("title"), 120),
                 "description": _trim(e.get("description"), 180),
                 "technologies": _trim(e.get("technologies"), 180),
@@ -173,6 +176,7 @@ def build_compact_resume(resume: dict) -> dict:
         ],
         "skills": [
             {
+                "id": str(e.get("id", "")),
                 "category": _trim(e.get("category"), 80),
                 "skills": _trim(e.get("skills"), 180),
             }
@@ -180,6 +184,7 @@ def build_compact_resume(resume: dict) -> dict:
         ],
         "careerVault": [
             {
+                "id": str(e.get("id", "")),
                 "type": _trim(e.get("type"), 40),
                 "title": _trim(e.get("title"), 120),
                 "subtitle": _trim(e.get("subtitle"), 120),
@@ -229,7 +234,8 @@ CRITICAL DIRECTIVES:
    - Set "itemId" to an existing skill category name (e.g., "Languages", "Frameworks", or "Developer Tools").
    - Set "suggestedContent" to a comma-separated list of the missing skills.
 
-3. Suggest 2-3 target modifications to existing bullets or sections (actions: "replace_bullet", "insert_bullet") to integrate keywords from the JD, ensuring every suggested bullet contains a concrete numeric metric.
+3. Suggest 2-3 target modifications to existing bullets or sections (actions: "replace_bullet", "insert_bullet", "modify_item") to integrate keywords from the JD, ensuring every suggested bullet contains a concrete numeric metric:
+   - When modifying, replacing, or inserting bullets/items in the existing resume, the "itemId" field MUST match the exact "id" string of the corresponding item from the RESUME input data.
 
 4. Keep "summary" to 2 sentences max.
 5. Maximize token efficiency. Be concise, direct, and avoid verbose explanations.

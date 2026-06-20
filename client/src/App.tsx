@@ -443,13 +443,13 @@ export default function App() {
         if (mod.action === "append_skills" || mod.action === "insert_bullet" || mod.action === "add_item") {
           let foundCategory = false;
           updated.skills = updated.skills.map(skill => {
-            const matchesCategory = skill.category.toLowerCase().includes(mod.itemId?.toLowerCase() || "") || 
-                                    skill.id === mod.itemId ||
+            const matchesCategory = skill.id === mod.itemId ||
+                                    skill.category.toLowerCase().includes(mod.itemId?.toLowerCase() || "") || 
                                     skill.category.toLowerCase() === "languages" || 
                                     skill.category.toLowerCase().includes("stack");
             if (matchesCategory && !foundCategory) {
-              if (!skill.skills.includes(mod.suggestedContent)) {
-                foundCategory = true;
+              foundCategory = true;
+              if (!skill.skills || !skill.skills.includes(mod.suggestedContent)) {
                 skill.skills = skill.skills ? `${skill.skills}, ${mod.suggestedContent}` : mod.suggestedContent;
               }
             }
