@@ -263,13 +263,58 @@ CAREER VAULT (Use these if relevant):
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail=f"Gemini request timed out after {GEMINI_TIMEOUT_SECS} seconds.")
 
+    # Check for generation finish status (e.g. truncation due to max tokens or safety filters)
+    candidate = response.candidates[0] if (response.candidates and len(response.candidates) > 0) else None
+    finish_reason = candidate.finish_reason if candidate else None
+    
     if not response.text:
-        raise HTTPException(status_code=500, detail="Empty response received from Gemini.")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Empty response received from Gemini. Finish Reason: {finish_reason}"
+        )
 
+    # Attempt to parse
+    raw_text = response.text.strip()
     try:
-        return json.loads(response.text)
+        return json.loads(raw_text)
     except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to parse Gemini response: {exc}")
+        # If the output was truncated (MAX_TOKENS), try a simple heuristic to close dangling brackets/quotes
+        # to see if we can recover the partial JSON structure safely.
+        if finish_reason == "MAX_TOKENS" or "MAX_TOKENS" in str(finish_reason):
+            # Attempt to fix typical JSON truncation by closing braces
+            repaired_text = raw_text
+            # Close unclosed string
+            if repaired_text.count('"') % 2 != 0:
+                repaired_text += '"'
+            
+            # Count opening vs closing braces
+            open_braces = repaired_text.count('{')
+            close_braces = repaired_text.count('}')
+            if open_braces > close_braces:
+                # remove trailing comma if present before closing
+                repaired_text = repaired_text.rstrip().rstrip(',')
+                repaired_text += '}' * (open_braces - close_braces)
+                
+            try:
+                parsed_data = json.loads(repaired_text)
+                # Ensure structure is minimally sound
+                if isinstance(parsed_data, dict) and "score" in parsed_data:
+                    if "missingSkills" not in parsed_data:
+                        parsed_data["missingSkills"] = []
+                    if "missingKeywords" not in parsed_data:
+                        parsed_data["missingKeywords"] = []
+                    if "suggestedModifications" not in parsed_data:
+                        parsed_data["suggestedModifications"] = []
+                    if "summary" not in parsed_data:
+                        parsed_data["summary"] = "Evaluation output was partially truncated due to length constraints."
+                    return parsed_data
+            except Exception:
+                pass
+
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to parse Gemini response (Finish Reason: {finish_reason}): {exc}. Raw text: {raw_text[:200]}..."
+        )
 
 
 @app.get("/api/health")
