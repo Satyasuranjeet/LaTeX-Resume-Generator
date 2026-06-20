@@ -4,13 +4,13 @@
   "outputDirectory": "client/dist",
   "framework": null,
   "functions": {
-    "server/api/index.ts": {
+    "api/index.ts": {
       "memory": 1024,
       "maxDuration": 60
     }
   },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/server/api/index" },
+    { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/(.*)",     "destination": "/index.html" }
   ]
 }
