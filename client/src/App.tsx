@@ -257,6 +257,33 @@ export default function App() {
     }>;
   } | null>(null);
 
+  // AI Resume Assistant & Writer states
+  const [assistantPrompt, setAssistantPrompt] = useState<string>("");
+  const [assistantSection, setAssistantSection] = useState<"projects" | "experience" | "skills">("projects");
+  const [isGeneratingAssistant, setIsGeneratingAssistant] = useState<boolean>(false);
+  const [assistantError, setAssistantError] = useState<string>("");
+  const [assistantResult, setAssistantResult] = useState<{
+    section: string;
+    project?: {
+      title: string;
+      description: string;
+      technologies: string;
+      bullets: string[];
+      dates: string;
+    };
+    experience?: {
+      role: string;
+      company: string;
+      locationType: string;
+      dates: string;
+      bullets: string[];
+    };
+    skills?: {
+      category: string;
+      skills: string;
+    };
+  } | null>(null);
+
   // New Career Archive / Vault Form state
   const [vaultFilter, setVaultFilter] = useState<"all" | "project" | "experience" | "skill" | "certification">("all");
   const [showAddVaultForm, setShowAddVaultForm] = useState<boolean>(false);
@@ -374,6 +401,97 @@ export default function App() {
     } finally {
       setIsEvaluating(false);
     }
+  };
+
+  // Call Gemini to generate a tailored item (project, experience, skills)
+  const generateAssistantItem = async () => {
+    if (!assistantPrompt.trim()) {
+      setAssistantError("Please enter a description for the AI to write.");
+      return;
+    }
+    
+    setIsGeneratingAssistant(true);
+    setAssistantError("");
+    setAssistantResult(null);
+
+    try {
+      const response = await fetch(`${API_BASE}/api/generate_item`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: assistantPrompt, section: assistantSection })
+      });
+      const data = await readResponseBody(response);
+
+      if (!response.ok) {
+        throw new Error(getResponseError(data, "Generation failed."));
+      }
+
+      setAssistantResult(data);
+    } catch (err: any) {
+      console.error("AI Generation Error:", err);
+      setAssistantError(err.message || "Failed to generate item.");
+    } finally {
+      setIsGeneratingAssistant(false);
+    }
+  };
+
+  // Inject the assistant generated item into the resume
+  const injectAssistantItem = () => {
+    if (!assistantResult) return;
+
+    setResumeData(prev => {
+      const updated = JSON.parse(JSON.stringify(prev)) as ResumeData;
+
+      if (assistantResult.section === "projects" && assistantResult.project) {
+        updated.projects.push({
+          id: `proj-${Date.now()}`,
+          title: assistantResult.project.title,
+          description: assistantResult.project.description,
+          dates: assistantResult.project.dates || "2024",
+          technologies: assistantResult.project.technologies,
+          bullets: assistantResult.project.bullets,
+          link: ""
+        });
+      } 
+      else if (assistantResult.section === "experience" && assistantResult.experience) {
+        updated.experience.push({
+          id: `exp-${Date.now()}`,
+          role: assistantResult.experience.role,
+          company: assistantResult.experience.company,
+          locationType: assistantResult.experience.locationType || "Remote",
+          employmentType: "Full-time",
+          dates: assistantResult.experience.dates || "Start - End",
+          bullets: assistantResult.experience.bullets
+        });
+      } 
+      else if (assistantResult.section === "skills" && assistantResult.skills) {
+        const cat = assistantResult.skills.category;
+        const skillsVal = assistantResult.skills.skills;
+        
+        let found = false;
+        updated.skills = updated.skills.map(s => {
+          if (s.category.toLowerCase() === cat.toLowerCase()) {
+            found = true;
+            s.skills = s.skills ? `${s.skills}, ${skillsVal}` : skillsVal;
+          }
+          return s;
+        });
+
+        if (!found) {
+          updated.skills.push({
+            id: `skill-${Date.now()}`,
+            category: cat,
+            skills: skillsVal
+          });
+        }
+      }
+
+      return updated;
+    });
+
+    // Clear prompt and result after injection
+    setAssistantPrompt("");
+    setAssistantResult(null);
   };
 
   // Splicing modifications suggested by Gemini directly into the resume data
@@ -1126,6 +1244,373 @@ export default function App() {
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             
+            {/* AI RESUME WRITER & ASSISTANT (NEW FEATURE) */}
+            <div className="rounded-none border border-[#E5A93C]/40 bg-[#12131a] overflow-hidden shadow-[0_0_15px_rgba(229,169,60,0.03)]">
+              <button 
+                onClick={() => toggleSection("ai-assistant")}
+                className="w-full flex items-center justify-between p-4 bg-zinc-950/65 hover:bg-zinc-950 transition-colors text-left font-mono font-bold text-xs uppercase tracking-wider text-zinc-100"
+              >
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[#E5A93C] animate-pulse" />
+                  <span className="flex items-center gap-1.5">
+                    AI Resume Writer & Assistant
+                    <span className="text-[8px] font-bold py-0.5 px-1.5 bg-[#E5A93C]/10 border border-[#E5A93C]/35 text-[#E5A93C] rounded-none h-fit">
+                      Co-Pilot
+                    </span>
+                  </span>
+                </div>
+                {activeSection === "ai-assistant" ? <ChevronUp className="w-4 h-4 text-zinc-400" /> : <ChevronDown className="w-4 h-4 text-zinc-400" />}
+              </button>
+
+              <AnimatePresence initial={false}>
+                {activeSection === "ai-assistant" && (
+                  <motion.div
+                    initial={{ height: 0 }}
+                    animate={{ height: "auto" }}
+                    exit={{ height: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="overflow-hidden border-t border-zinc-805"
+                  >
+                    <div className="p-4 space-y-4">
+                      <p className="text-[10px] text-zinc-400 leading-relaxed font-sans">
+                        Need help crafting your resume? Instruct the AI to draft complete projects, metric-driven experience bullets, or technical skills below. You can review and edit them before adding them to your resume.
+                      </p>
+
+                      <div className="space-y-3">
+                        {/* SELECT SECTION */}
+                        <div>
+                          <label className="block text-[9px] font-mono tracking-widest font-semibold text-zinc-500 uppercase mb-1">Target Section</label>
+                          <div className="grid grid-cols-3 gap-2">
+                            {(["projects", "experience", "skills"] as const).map(sec => (
+                              <button
+                                key={sec}
+                                onClick={() => {
+                                  setAssistantSection(sec);
+                                  setAssistantResult(null);
+                                }}
+                                className={`py-1.5 text-[9.5px] font-bold uppercase tracking-wider transition border font-mono rounded-none cursor-pointer ${
+                                  assistantSection === sec
+                                    ? "bg-[#E5A93C]/10 text-[#E5A93C] border-[#E5A93C]"
+                                    : "bg-zinc-950 border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                                }`}
+                              >
+                                {sec}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* INPUT PROMPT */}
+                        <div>
+                          <label className="block text-[9px] font-mono tracking-widest font-semibold text-zinc-500 uppercase mb-1">AI Prompt / Details</label>
+                          <textarea
+                            value={assistantPrompt}
+                            onChange={(e) => setAssistantPrompt(e.target.value)}
+                            placeholder={
+                              assistantSection === "projects"
+                                ? "e.g., A real-time chat application using WebSocket, Redis, and React."
+                                : assistantSection === "experience"
+                                  ? "e.g., Software Engineer at Stripe working on checkout API optimizations."
+                                  : "e.g., Backend technologies, cloud developer tools, databases."
+                            }
+                            rows={3}
+                            className="w-full bg-zinc-950 border border-zinc-800/80 rounded-none px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-[#E5A93C] placeholder-zinc-650 resize-none font-sans"
+                          />
+                        </div>
+
+                        {/* PRESETS */}
+                        <div className="flex flex-wrap gap-1.5">
+                          <button
+                            onClick={() => setAssistantPrompt(
+                              assistantSection === "projects"
+                                ? "E-Commerce microservices backend platform with high performance"
+                                : assistantSection === "experience"
+                                  ? "Full Stack Engineer building responsive dashboard widgets and REST APIs"
+                                  : "Cloud & DevOps skills like Docker, Kubernetes, AWS, Terraform"
+                            )}
+                            className="text-[8px] font-mono bg-zinc-900 border border-zinc-800 px-2 py-0.5 hover:border-zinc-700 text-zinc-400 cursor-pointer"
+                          >
+                            💡 Use Template Prompt
+                          </button>
+                        </div>
+
+                        {/* GENERATE BUTTON */}
+                        <button
+                          onClick={generateAssistantItem}
+                          disabled={isGeneratingAssistant}
+                          className="w-full py-2 bg-[#E5A93C]/10 hover:bg-[#E5A93C] border border-[#E5A93C]/35 hover:border-[#E5A93C] text-[#E5A93C] hover:text-black font-bold font-mono text-[10px] tracking-wider transition uppercase rounded-none cursor-pointer flex items-center justify-center gap-1.5"
+                        >
+                          {isGeneratingAssistant ? (
+                            <>
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              Generating Sourced Content...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-3 h-3" />
+                              Write/Generate Section
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {/* ERROR BOX */}
+                      {assistantError && (
+                        <div className="p-2.5 bg-red-950/20 border border-red-900/40 text-red-400 text-[10px] font-sans">
+                          {assistantError}
+                        </div>
+                      )}
+
+                      {/* OUTPUT AREA (PREVIEW BEFORE INJECTING) */}
+                      {assistantResult && (
+                        <div className="p-3 bg-zinc-950 border border-zinc-800 space-y-3">
+                          <div className="flex items-center justify-between border-b border-zinc-850 pb-2">
+                            <span className="text-[9px] font-mono font-bold text-yellow-500 uppercase tracking-widest">Generated AI Preview</span>
+                            <span className="text-[8px] font-mono text-zinc-500">Edit below if needed</span>
+                          </div>
+
+                          <div className="space-y-3.5 text-xs">
+                            {/* PROJECTS PREVIEW */}
+                            {assistantResult.section === "projects" && assistantResult.project && (
+                              <div className="space-y-2">
+                                <div>
+                                  <label className="block text-[8px] font-mono text-zinc-500 uppercase mb-0.5">Project Title</label>
+                                  <input
+                                    type="text"
+                                    value={assistantResult.project.title}
+                                    onChange={(e) => {
+                                      const title = e.target.value;
+                                      setAssistantResult(prev => prev ? {
+                                        ...prev,
+                                        project: { ...prev.project!, title }
+                                      } : null);
+                                    }}
+                                    className="w-full bg-zinc-900/60 border border-zinc-850 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-yellow-600 font-sans"
+                                  />
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="block text-[8px] font-mono text-zinc-500 uppercase mb-0.5">Technologies</label>
+                                    <input
+                                      type="text"
+                                      value={assistantResult.project.technologies}
+                                      onChange={(e) => {
+                                        const technologies = e.target.value;
+                                        setAssistantResult(prev => prev ? {
+                                          ...prev,
+                                          project: { ...prev.project!, technologies }
+                                        } : null);
+                                      }}
+                                      className="w-full bg-zinc-900/60 border border-zinc-850 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-yellow-600 font-sans"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[8px] font-mono text-zinc-500 uppercase mb-0.5">Dates</label>
+                                    <input
+                                      type="text"
+                                      value={assistantResult.project.dates}
+                                      onChange={(e) => {
+                                        const dates = e.target.value;
+                                        setAssistantResult(prev => prev ? {
+                                          ...prev,
+                                          project: { ...prev.project!, dates }
+                                        } : null);
+                                      }}
+                                      className="w-full bg-zinc-900/60 border border-zinc-850 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-yellow-600 font-sans"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <label className="block text-[8px] font-mono text-zinc-500 uppercase mb-0.5">Description</label>
+                                  <textarea
+                                    value={assistantResult.project.description}
+                                    onChange={(e) => {
+                                      const description = e.target.value;
+                                      setAssistantResult(prev => prev ? {
+                                        ...prev,
+                                        project: { ...prev.project!, description }
+                                      } : null);
+                                    }}
+                                    rows={2}
+                                    className="w-full bg-zinc-900/60 border border-zinc-850 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-yellow-600 font-sans resize-none"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="block text-[8px] font-mono text-zinc-500 uppercase mb-1">Key Achievement Bullets</label>
+                                  <div className="space-y-1.5">
+                                    {assistantResult.project.bullets.map((bullet, bIdx) => (
+                                      <input
+                                        key={bIdx}
+                                        type="text"
+                                        value={bullet}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setAssistantResult(prev => {
+                                            if (!prev || !prev.project) return null;
+                                            const bullets = [...prev.project.bullets];
+                                            bullets[bIdx] = val;
+                                            return { ...prev, project: { ...prev.project, bullets } };
+                                          });
+                                        }}
+                                        className="w-full bg-zinc-900/60 border border-zinc-850 px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:border-yellow-600 font-sans"
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* EXPERIENCE PREVIEW */}
+                            {assistantResult.section === "experience" && assistantResult.experience && (
+                              <div className="space-y-2">
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="block text-[8px] font-mono text-zinc-500 uppercase mb-0.5">Role / Position</label>
+                                    <input
+                                      type="text"
+                                      value={assistantResult.experience.role}
+                                      onChange={(e) => {
+                                        const role = e.target.value;
+                                        setAssistantResult(prev => prev ? {
+                                          ...prev,
+                                          experience: { ...prev.experience!, role }
+                                        } : null);
+                                      }}
+                                      className="w-full bg-zinc-900/60 border border-zinc-850 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-yellow-600 font-sans"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[8px] font-mono text-zinc-500 uppercase mb-0.5">Company</label>
+                                    <input
+                                      type="text"
+                                      value={assistantResult.experience.company}
+                                      onChange={(e) => {
+                                        const company = e.target.value;
+                                        setAssistantResult(prev => prev ? {
+                                          ...prev,
+                                          experience: { ...prev.experience!, company }
+                                        } : null);
+                                      }}
+                                      className="w-full bg-zinc-900/60 border border-zinc-850 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-yellow-600 font-sans"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="block text-[8px] font-mono text-zinc-500 uppercase mb-0.5">Location Type</label>
+                                    <input
+                                      type="text"
+                                      value={assistantResult.experience.locationType}
+                                      onChange={(e) => {
+                                        const locationType = e.target.value;
+                                        setAssistantResult(prev => prev ? {
+                                          ...prev,
+                                          experience: { ...prev.experience!, locationType }
+                                        } : null);
+                                      }}
+                                      className="w-full bg-zinc-900/60 border border-zinc-850 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-yellow-600 font-sans"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-[8px] font-mono text-zinc-500 uppercase mb-0.5">Dates</label>
+                                    <input
+                                      type="text"
+                                      value={assistantResult.experience.dates}
+                                      onChange={(e) => {
+                                        const dates = e.target.value;
+                                        setAssistantResult(prev => prev ? {
+                                          ...prev,
+                                          experience: { ...prev.experience!, dates }
+                                        } : null);
+                                      }}
+                                      className="w-full bg-zinc-900/60 border border-zinc-850 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-yellow-600 font-sans"
+                                    />
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <label className="block text-[8px] font-mono text-zinc-500 uppercase mb-1">Job Accomplishment Bullets</label>
+                                  <div className="space-y-1.5">
+                                    {assistantResult.experience.bullets.map((bullet, bIdx) => (
+                                      <input
+                                        key={bIdx}
+                                        type="text"
+                                        value={bullet}
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          setAssistantResult(prev => {
+                                            if (!prev || !prev.experience) return null;
+                                            const bullets = [...prev.experience.bullets];
+                                            bullets[bIdx] = val;
+                                            return { ...prev, experience: { ...prev.experience, bullets } };
+                                          });
+                                        }}
+                                        className="w-full bg-zinc-900/60 border border-zinc-850 px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:border-yellow-600 font-sans"
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* SKILLS PREVIEW */}
+                            {assistantResult.section === "skills" && assistantResult.skills && (
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="block text-[8px] font-mono text-zinc-500 uppercase mb-0.5">Category</label>
+                                  <input
+                                    type="text"
+                                    value={assistantResult.skills.category}
+                                    onChange={(e) => {
+                                      const category = e.target.value;
+                                      setAssistantResult(prev => prev ? {
+                                        ...prev,
+                                        skills: { ...prev.skills!, category }
+                                      } : null);
+                                    }}
+                                    className="w-full bg-zinc-900/60 border border-zinc-850 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-yellow-600 font-sans"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[8px] font-mono text-zinc-500 uppercase mb-0.5">Skills (Comma-separated)</label>
+                                  <input
+                                    type="text"
+                                    value={assistantResult.skills.skills}
+                                    onChange={(e) => {
+                                      const skills = e.target.value;
+                                      setAssistantResult(prev => prev ? {
+                                        ...prev,
+                                        skills: { ...prev.skills!, skills }
+                                      } : null);
+                                    }}
+                                    className="w-full bg-zinc-900/60 border border-zinc-850 px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-yellow-600 font-sans"
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* INJECT BUTTON */}
+                          <button
+                            onClick={injectAssistantItem}
+                            className="w-full py-1.5 mt-2 bg-emerald-500 hover:bg-emerald-600 border border-emerald-600 text-white font-bold font-mono text-[9.5px] uppercase tracking-wider transition rounded-none cursor-pointer flex items-center justify-center gap-1.5"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            Review & Inject into Resume
+                          </button>
+                        </div>
+                      )}
+
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
             {/* AI ATS SCORER & OPTIMIZER HUB */}
             <div className="rounded-none border-2 border-yellow-500/20 bg-[#151620] overflow-hidden shadow-[0_0_15px_rgba(234,179,8,0.03)]">
               <button 

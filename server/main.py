@@ -72,6 +72,34 @@ class ATSScoringResponse(BaseModel):
     suggestedModifications: list[SuggestedModification]
 
 
+class GeneratedProject(BaseModel):
+    title: str
+    description: str
+    technologies: str
+    bullets: list[str]
+    dates: str
+
+class GeneratedExperience(BaseModel):
+    role: str
+    company: str
+    locationType: str
+    dates: str
+    bullets: list[str]
+
+class GeneratedSkills(BaseModel):
+    category: str
+    skills: str
+
+class AIHelperResponse(BaseModel):
+    section: str
+    project: Optional[GeneratedProject] = None
+    experience: Optional[GeneratedExperience] = None
+    skills: Optional[GeneratedSkills] = None
+
+class AIHelperRequest(BaseModel):
+    prompt: str
+    section: str
+
 class ScoreRequest(BaseModel):
     resumeData: dict
     jd: str
@@ -321,6 +349,53 @@ CAREER VAULT (Use these if relevant):
             status_code=502,
             detail=f"Failed to parse Gemini response (Finish Reason: {finish_reason}): {exc}. Raw text: {raw_text[:200]}..."
         )
+
+
+@app.post("/api/generate_item")
+async def generate_item(body: AIHelperRequest):
+    if not body.prompt.strip():
+        raise HTTPException(status_code=400, detail="Prompt is required.")
+
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="GEMINI_API_KEY is not configured on the server.")
+
+    system_instruction = f"""You are an expert AI Resume Maker and Writer.
+Generate a high-quality resume entry for the section: '{body.section}' based on the user's request: '{body.prompt}'.
+Return a structured JSON response matching the schema.
+
+CRITICAL DIRECTIVES:
+- If section is 'projects', populate the 'project' field with a realistic, impressive project. The bullets must be metric-driven (containing %, $, hrs, or x metrics) and technologies should be a comma-separated list of tools.
+- If section is 'experience', populate the 'experience' field with a realistic job experience. The bullets must be metric-driven (containing %, $, hrs, or x metrics).
+- If section is 'skills', populate the 'skills' field with a categories of skills (e.g. category 'Backend' and skills 'FastAPI, PostgreSQL').
+- All generated contents must be professional, resume-ready, and optimize key achievements.
+"""
+
+    client = genai.Client(api_key=api_key)
+    try:
+        response = await asyncio.wait_for(
+            client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=f"Generate resume entry for: {body.prompt} in section {body.section}",
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    response_mime_type="application/json",
+                    response_schema=AIHelperResponse,
+                    max_output_tokens=2048,
+                ),
+            ),
+            timeout=GEMINI_TIMEOUT_SECS,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Gemini request timed out.")
+
+    if not response.text:
+        raise HTTPException(status_code=500, detail="Empty response received from Gemini.")
+
+    try:
+        return json.loads(response.text)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {exc}")
 
 
 @app.get("/api/health")
