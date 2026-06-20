@@ -252,6 +252,7 @@ export default function App() {
         dates?: string;
         technologies?: string;
         bullets?: string[];
+        description?: string;
       };
     }>;
   } | null>(null);
@@ -482,7 +483,7 @@ export default function App() {
           
           let finalTitle = mod.itemDetails?.title || vaultItem?.title || "AI Enhanced Project";
           let finalBullets = mod.itemDetails?.bullets || (vaultItem?.description ? [vaultItem.description] : [mod.suggestedContent]);
-          let finalDesc = vaultItem?.description || "Project demonstrating key engineering patterns.";
+          let finalDesc = mod.itemDetails?.description || vaultItem?.description || "Project demonstrating key engineering patterns.";
 
           if (finalTitle.length > 60) {
             finalBullets = [finalTitle, ...finalBullets];

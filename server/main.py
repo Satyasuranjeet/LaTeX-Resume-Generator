@@ -49,6 +49,7 @@ class SuggestedModificationDetails(BaseModel):
     dates: Optional[str] = None
     technologies: Optional[str] = None
     bullets: Optional[list[str]] = None
+    description: Optional[str] = None
 
 
 class SuggestedModification(BaseModel):
@@ -207,26 +208,40 @@ async def score_resume(body: ScoreRequest):
     )
     vault_text = json.dumps(compact["careerVault"], indent=2)
 
-    prompt = f"""ATS Resume Optimizer. Output JSON only. No preamble.
+    system_prompt = """You are an expert ATS Resume Optimizer.
+Analyze the candidate's RESUME against the JOB DESCRIPTION (JD).
+Compare them and return a structured JSON response matching the schema.
 
-RULES:
-- score: 0-100 ATS match. Be strict.
-- missingSkills: tools/frameworks in JD absent from resume (max 8).
-- missingKeywords: action verbs/methodologies missing (max 8).
-- summary: 2 sentences max.
-- suggestedModifications: max 6 targeted changes.
-  - actions: append_skills | insert_bullet | replace_bullet | add_item | modify_item
-  - ALL bullet suggestedContent MUST include a % / $ / hrs / x metric.
-  - Prefer vault items over AI crafting. Mark AI-crafted ones in archiveItemSource.
-  - append_skills -> add to skills section only; add_item -> new project/experience entry.
+CRITICAL DIRECTIVES:
+1. Always suggest exactly 1 brand-new project (action: "add_item", section: "projects") if the resume has fewer than 2 projects or is missing direct proof of the core technologies in the JD:
+   - Make the project highly relevant to the JD.
+   - Fully populate "itemDetails":
+     - "title": A professional, resume-ready title (max 50 chars).
+     - "technologies": A comma-separated list of critical tools from the JD (e.g. "FastAPI, PostgreSQL, AWS").
+     - "description": A concise, 1-sentence high-level description of what the project does (e.g. "A real-time distributed analytics system built to process high-throughput event streams.").
+     - "bullets": 2-3 metric-driven accomplishment bullets (must contain %/$/hrs/x metrics).
+     - "dates": "2024" or "2025".
+   - "suggestedContent" must be a 1-sentence summary of this project.
+   - "itemId" must be "new-project-suggestion".
+   - "archiveItemSource" must be "AI-Crafted".
 
-RESUME:
+2. Suggest adding crucial missing skills (action: "append_skills", section: "skills"):
+   - Set "itemId" to an existing skill category name (e.g., "Languages", "Frameworks", or "Developer Tools").
+   - Set "suggestedContent" to a comma-separated list of the missing skills.
+
+3. Suggest 2-3 target modifications to existing bullets or sections (actions: "replace_bullet", "insert_bullet") to integrate keywords from the JD, ensuring every suggested bullet contains a concrete numeric metric.
+
+4. Keep "summary" to 2 sentences max.
+5. Maximize token efficiency. Be concise, direct, and avoid verbose explanations.
+"""
+
+    prompt = f"""RESUME:
 {active_resume_text}
 
 JD:
-{body.jd[:3000]}
+{body.jd[:2500]}
 
-VAULT:
+CAREER VAULT (Use these if relevant):
 {vault_text}
 """
 
@@ -237,9 +252,10 @@ VAULT:
                 model="gemini-2.5-flash",
                 contents=prompt,
                 config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
                     response_mime_type="application/json",
                     response_schema=ATSScoringResponse,
-                    max_output_tokens=8192,
+                    max_output_tokens=2048,
                 ),
             ),
             timeout=GEMINI_TIMEOUT_SECS,
