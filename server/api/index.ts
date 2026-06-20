@@ -106,7 +106,7 @@ ${careerVaultText}
 `;
 
     const responsePromise = ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: {
         responseMimeType: "application/json",

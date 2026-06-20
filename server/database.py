@@ -1,6 +1,7 @@
 """MongoDB connection and helpers using Motor (async driver)."""
 
 import os
+from urllib.parse import urlparse
 from typing import Optional
 
 import motor.motor_asyncio
@@ -23,9 +24,10 @@ async def connect_db() -> None:
         )
         await _client.admin.command("ping")
         # derive DB name from the URI path, defaulting to "resume-builder"
-        db_name = (MONGO_URI.rstrip("/").rsplit("/", 1)[-1].split("?")[0]) or "resume-builder"
+        parsed_uri = urlparse(MONGO_URI)
+        db_name = parsed_uri.path.strip("/") or "resume-builder"
         _db = _client[db_name]
-        print(f"MongoDB connected successfully → {db_name}")
+        print(f"MongoDB connected successfully -> {db_name}")
     except Exception as exc:
         print(f"MongoDB connection warning (server will still start): {exc}")
 

@@ -4,12 +4,12 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "clean": "rm -rf dist",
-    "lint": "tsc --noEmit",
-    "backend": "cd backend && uvicorn main:app --reload --port 8000"
+    "dev": "cd client && npm run dev",
+    "build": "cd client && npm run build",
+    "preview": "cd client && npm run preview",
+    "clean": "cd client && npm run clean",
+    "lint": "cd client && npm run lint",
+    "backend": "cd server && uvicorn main:app --reload --port 8000"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

@@ -1,23 +1,38 @@
 """FastAPI backend for the LaTeX resume generator."""
 
 import asyncio
+from contextlib import asynccontextmanager
+from datetime import datetime
 import json
 import os
+from typing import Optional
 
-import google.generativeai as genai
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from google import genai
+from google.genai import types
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import httpx
+import jwt
+from jwt import PyJWKClient
 from pydantic import BaseModel
 
-from database import connect_db
+from database import connect_db, users_col
 
 load_dotenv()
 
 GEMINI_TIMEOUT_SECS = 60
 
-app = FastAPI(title="LaTeX Resume Generator API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await connect_db()
+    yield
+
+
+app = FastAPI(title="LaTeX Resume Generator API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -28,14 +43,81 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-async def startup_event() -> None:
-    await connect_db()
+class SuggestedModificationDetails(BaseModel):
+    title: Optional[str] = None
+    subtitle: Optional[str] = None
+    dates: Optional[str] = None
+    technologies: Optional[str] = None
+    bullets: Optional[list[str]] = None
+
+
+class SuggestedModification(BaseModel):
+    section: str
+    itemId: str
+    action: str
+    bulletIndex: Optional[int] = None
+    explanation: str
+    originalContent: Optional[str] = None
+    suggestedContent: str
+    archiveItemSource: str
+    itemDetails: Optional[SuggestedModificationDetails] = None
+
+
+class ATSScoringResponse(BaseModel):
+    score: int
+    summary: str
+    missingSkills: list[str]
+    missingKeywords: list[str]
+    suggestedModifications: list[SuggestedModification]
 
 
 class ScoreRequest(BaseModel):
     resumeData: dict
     jd: str
+
+
+class ProfileSaveRequest(BaseModel):
+    resumeData: dict
+    settings: dict
+
+
+security = HTTPBearer()
+
+CLERK_SECRET_KEY = os.getenv("CLERK_SECRET_KEY", "sk_test_TWPWnvnIN8vu42aGuNcpDLQ3LxX6f6KyW4DkseZlTV")
+CLERK_JWKS_URL = "https://worthy-magpie-21.clerk.accounts.dev/.well-known/jwks.json"
+
+jwks_client = PyJWKClient(CLERK_JWKS_URL)
+
+
+async def get_current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    token = credentials.credentials
+    try:
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        payload = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            options={"verify_aud": False}
+        )
+        return payload["sub"]
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Unauthorized: {e}")
+
+
+async def fetch_clerk_profile(clerk_id: str) -> dict:
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {"Authorization": f"Bearer {CLERK_SECRET_KEY}"}
+            res = await client.get(f"https://api.clerk.com/v1/users/{clerk_id}", headers=headers)
+            if res.status_code == 200:
+                data = res.json()
+                email = data.get("email_addresses", [{}])[0].get("email_address", "")
+                name = f"{data.get('first_name', '')} {data.get('last_name', '')}".strip()
+                picture = data.get("image_url", "")
+                return {"email": email, "name": name, "picture": picture}
+    except Exception as err:
+        print("Clerk profile fetch warning:", err)
+    return {"email": "", "name": "", "picture": ""}
 
 
 def _trim(value, max_len: int) -> str:
@@ -148,19 +230,18 @@ VAULT:
 {vault_text}
 """
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        "gemini-2.0-flash",
-        generation_config=genai.types.GenerationConfig(
-            response_mime_type="application/json",
-            max_output_tokens=2048,
-        ),
-    )
-
-    loop = asyncio.get_event_loop()
+    client = genai.Client(api_key=api_key)
     try:
         response = await asyncio.wait_for(
-            loop.run_in_executor(None, lambda: model.generate_content(prompt)),
+            client.aio.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=ATSScoringResponse,
+                    max_output_tokens=8192,
+                ),
+            ),
             timeout=GEMINI_TIMEOUT_SECS,
         )
     except asyncio.TimeoutError:
@@ -178,6 +259,45 @@ VAULT:
 @app.get("/api/health")
 async def health():
     return {"status": "healthy"}
+
+
+@app.get("/api/user/profile")
+async def get_profile(clerk_id: str = Depends(get_current_user_id)):
+    col = users_col()
+    user_doc = await col.find_one({"clerkId": clerk_id})
+    if user_doc:
+        return {
+            "resumeData": user_doc.get("resumeData"),
+            "settings": user_doc.get("settings")
+        }
+    return {"resumeData": None, "settings": None}
+
+
+@app.post("/api/user/profile")
+async def save_profile(body: ProfileSaveRequest, clerk_id: str = Depends(get_current_user_id)):
+    col = users_col()
+    profile = await fetch_clerk_profile(clerk_id)
+    
+    email = profile.get("email") or body.resumeData.get("personalInfo", {}).get("email") or ""
+    name = profile.get("name") or body.resumeData.get("personalInfo", {}).get("name") or ""
+    picture = profile.get("picture") or ""
+    
+    await col.update_one(
+        {"clerkId": clerk_id},
+        {
+            "$set": {
+                "clerkId": clerk_id,
+                "email": email,
+                "name": name,
+                "picture": picture,
+                "resumeData": body.resumeData,
+                "settings": body.settings,
+                "updatedAt": datetime.utcnow()
+            }
+        },
+        upsert=True
+    )
+    return {"status": "success"}
 
 
 @app.exception_handler(Exception)
