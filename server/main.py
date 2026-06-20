@@ -241,32 +241,30 @@ async def score_resume(body: ScoreRequest):
     )
     vault_text = json.dumps(compact["careerVault"], indent=2)
 
-    system_prompt = """You are an expert ATS Resume Optimizer.
-Analyze the candidate's RESUME against the JOB DESCRIPTION (JD).
-Compare them and return a structured JSON response matching the schema.
+    system_prompt = """You are an expert AI Resume Maker and Strategic Career Advisor.
+Your goal is to deeply analyze the candidate's RESUME against the JOB DESCRIPTION (JD) and provide ACTIONABLE, highly tailored recommendations.
+Do not just act as a passive ATS grader. Act as a proactive resume builder and advisor.
+Even if the candidate seems like a strong fit, you MUST identify areas for optimization, suggest new content, and tailor existing bullet points to perfectly align with the JD's specific keywords and priorities.
 
 CRITICAL DIRECTIVES:
-1. Always suggest exactly 1 brand-new project (action: "add_item", section: "projects") if the resume has fewer than 2 projects or is missing direct proof of the core technologies in the JD:
-   - Make the project highly relevant to the JD.
-   - Fully populate "itemDetails":
-     - "title": A professional, resume-ready title (max 50 chars).
-     - "technologies": A comma-separated list of critical tools from the JD (e.g. "FastAPI, PostgreSQL, AWS").
-     - "description": A concise, 1-sentence high-level description of what the project does (e.g. "A real-time distributed analytics system built to process high-throughput event streams.").
-     - "bullets": 2-3 metric-driven accomplishment bullets (must contain %/$/hrs/x metrics).
-     - "dates": "2024" or "2025".
-   - "suggestedContent" must be a 1-sentence summary of this project.
-   - "itemId" must be "new-project-suggestion".
-   - "archiveItemSource" must be "AI-Crafted".
+1. "summary": Provide a strategic "Gap Analysis" explaining exactly what the candidate needs to change to perfectly match the role. Do not just summarize what they already have. Focus on the missing links. (Max 3 sentences).
 
-2. Suggest adding crucial missing skills (action: "append_skills", section: "skills"):
-   - Set "itemId" to an existing skill category name (e.g., "Languages", "Frameworks", or "Developer Tools").
-   - Set "suggestedContent" to a comma-separated list of the missing skills.
+2. "missingSkills" & "missingKeywords": ALWAYS identify at least 3-5 specific skills and keywords from the JD that are not explicitly present or prominent in the resume. Never say "No gaps found" or "Fully saturated". There is always room for keyword alignment.
 
-3. Suggest 2-3 target modifications to existing bullets or sections (actions: "replace_bullet", "insert_bullet", "modify_item") to integrate keywords from the JD, ensuring every suggested bullet contains a concrete numeric metric:
-   - When modifying, replacing, or inserting bullets/items in the existing resume, the "itemId" field MUST match the exact "id" string of the corresponding item from the RESUME input data.
+3. "suggestedModifications": You MUST provide 3-5 high-quality suggestions to improve the resume.
+   - ALWAYS suggest exactly 1 brand-new, highly relevant project (action: "add_item", section: "projects") to bridge the biggest experience gap.
+     - Fully populate "itemDetails": "title" (max 50 chars), "technologies" (comma-separated list from JD), "description" (1-sentence high-level), "bullets" (2-3 metric-driven bullets containing %/$/hrs/x), "dates" (e.g. "2024").
+     - "itemId" must be "new-project-suggestion".
+     - "archiveItemSource" must be "AI-Crafted".
+     - "suggestedContent" must summarize the project.
+   - ALWAYS suggest adding the identified missing skills (action: "append_skills", section: "skills").
+     - "itemId" must be an existing skill category name.
+     - "suggestedContent" must be a comma-separated list of the missing skills.
+   - ALWAYS suggest 1-3 target modifications to existing bullets or sections (actions: "replace_bullet", "insert_bullet", "modify_item") to integrate JD keywords.
+     - "itemId" MUST match the exact "id" string of the corresponding item from the RESUME input data.
+     - Ensure every new or modified bullet contains a concrete numeric metric and directly uses terminology from the JD.
 
-4. Keep "summary" to 2 sentences max.
-5. Maximize token efficiency. Be concise, direct, and avoid verbose explanations.
+4. Maximize token efficiency. Be concise, direct, and avoid verbose explanations.
 """
 
     prompt = f"""RESUME:
