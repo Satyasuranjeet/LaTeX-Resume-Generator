@@ -261,6 +261,7 @@ CRITICAL DIRECTIVES:
      - "itemId" must be an existing skill category name.
      - "suggestedContent" must be a comma-separated list of the missing skills.
    - ALWAYS suggest 1-3 target modifications to existing bullets or sections (actions: "replace_bullet", "insert_bullet", "modify_item") to integrate JD keywords.
+     - For "replace_bullet", you MUST provide "bulletIndex" (0-indexed integer of the bullet being replaced), "originalContent" (the exact original text), and "suggestedContent" (the new, keyword-embedded line meaning the same but with higher weightage).
      - "itemId" MUST match the exact "id" string of the corresponding item from the RESUME input data.
      - Ensure every new or modified bullet contains a concrete numeric metric and directly uses terminology from the JD.
 

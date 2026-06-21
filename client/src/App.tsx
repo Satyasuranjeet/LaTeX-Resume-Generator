@@ -530,7 +530,7 @@ export default function App() {
         updated.experience = updated.experience.map(exp => {
           if (exp.id === mod.itemId) {
             let bullets = [...exp.bullets];
-            if (mod.action === "replace_bullet" && typeof mod.bulletIndex === "number") {
+            if (mod.action === "replace_bullet" && mod.bulletIndex != null) {
               bullets[mod.bulletIndex] = mod.suggestedContent;
             } else if (mod.action === "insert_bullet") {
               bullets.push(mod.suggestedContent);
@@ -557,7 +557,7 @@ export default function App() {
         updated.projects = updated.projects.map(proj => {
           if (proj.id === mod.itemId) {
             let bullets = [...proj.bullets];
-            if (mod.action === "replace_bullet" && typeof mod.bulletIndex === "number") {
+            if (mod.action === "replace_bullet" && mod.bulletIndex != null) {
               bullets[mod.bulletIndex] = mod.suggestedContent;
             } else if (mod.action === "insert_bullet") {
               bullets.push(mod.suggestedContent);
