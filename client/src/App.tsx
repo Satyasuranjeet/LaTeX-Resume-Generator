@@ -494,6 +494,29 @@ export default function App() {
     setAssistantResult(null);
   };
 
+  const handleModChange = (idx: number, field: string, value: any) => {
+    setEvaluationResult(prev => {
+      if (!prev) return prev;
+      const updated = { ...prev };
+      updated.suggestedModifications = [...prev.suggestedModifications];
+      const mod = { ...updated.suggestedModifications[idx] };
+      if (field === 'suggestedContent') {
+        mod.suggestedContent = value;
+      } else if (field.startsWith('itemDetails.')) {
+        const subfield = field.split('.')[1];
+        mod.itemDetails = { ...(mod.itemDetails || {}) };
+        (mod.itemDetails as any)[subfield] = value;
+      } else if (field.startsWith('bullets.')) {
+        const bIdx = parseInt(field.split('.')[1], 10);
+        mod.itemDetails = { ...(mod.itemDetails || {}) };
+        mod.itemDetails.bullets = [...(mod.itemDetails.bullets || [])];
+        mod.itemDetails.bullets[bIdx] = value;
+      }
+      updated.suggestedModifications[idx] = mod;
+      return updated;
+    });
+  };
+
   // Splicing modifications suggested by Gemini directly into the resume data
   const applyAiModification = (modIndex: number) => {
     if (!evaluationResult) return;
@@ -1809,9 +1832,53 @@ export default function App() {
                                         {mod.originalContent}
                                       </div>
                                     )}
-                                    <div className="p-1.5 px-2 bg-emerald-500/5 border border-emerald-500/20 text-emerald-400 rounded-none font-bold break-all whitespace-pre-wrap">
-                                      <span className="text-[8px] font-bold text-emerald-500 mr-1.5 font-sans">AI TAILORED (METRIC OPTIMIZED):</span>
-                                      {mod.suggestedContent}
+                                    <div className="p-1.5 px-2 bg-emerald-500/5 border border-emerald-500/20 text-emerald-400 rounded-none font-bold">
+                                      <span className="text-[8px] font-bold text-emerald-500 mr-1.5 font-sans block mb-1">AI TAILORED (EDITABLE BEFORE APPLYING):</span>
+                                      {mod.action === 'add_item' && mod.itemDetails ? (
+                                        <div className="space-y-2 mt-2">
+                                          <input 
+                                            className="w-full bg-zinc-900/60 border border-emerald-500/30 px-2 py-1 text-xs focus:outline-none focus:border-emerald-500 text-zinc-200 font-sans" 
+                                            value={mod.itemDetails.title || ""} 
+                                            onChange={(e) => handleModChange(idx, 'itemDetails.title', e.target.value)} 
+                                            placeholder="Title" 
+                                            disabled={mod.applied}
+                                          />
+                                          <div className="grid grid-cols-2 gap-2">
+                                            <input 
+                                              className="w-full bg-zinc-900/60 border border-emerald-500/30 px-2 py-1 text-xs focus:outline-none focus:border-emerald-500 text-zinc-200 font-sans" 
+                                              value={mod.itemDetails.technologies || ""} 
+                                              onChange={(e) => handleModChange(idx, 'itemDetails.technologies', e.target.value)} 
+                                              placeholder="Technologies" 
+                                              disabled={mod.applied}
+                                            />
+                                            <input 
+                                              className="w-full bg-zinc-900/60 border border-emerald-500/30 px-2 py-1 text-xs focus:outline-none focus:border-emerald-500 text-zinc-200 font-sans" 
+                                              value={mod.itemDetails.dates || ""} 
+                                              onChange={(e) => handleModChange(idx, 'itemDetails.dates', e.target.value)} 
+                                              placeholder="Dates" 
+                                              disabled={mod.applied}
+                                            />
+                                          </div>
+                                          {(mod.itemDetails.bullets || []).map((b, bIdx) => (
+                                            <textarea 
+                                              key={bIdx}
+                                              className="w-full bg-zinc-900/60 border border-emerald-500/30 px-2 py-1 text-xs focus:outline-none focus:border-emerald-500 text-zinc-200 font-sans resize-none" 
+                                              value={b} 
+                                              rows={2}
+                                              onChange={(e) => handleModChange(idx, `bullets.${bIdx}`, e.target.value)} 
+                                              disabled={mod.applied}
+                                            />
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <textarea 
+                                          className="w-full bg-zinc-900/60 border border-emerald-500/30 px-2 py-1 text-xs focus:outline-none focus:border-emerald-500 text-emerald-400 font-sans resize-none" 
+                                          value={mod.suggestedContent} 
+                                          rows={3}
+                                          onChange={(e) => handleModChange(idx, 'suggestedContent', e.target.value)} 
+                                          disabled={mod.applied}
+                                        />
+                                      )}
                                     </div>
                                   </div>
 
